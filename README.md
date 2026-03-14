@@ -22,6 +22,19 @@ python main.py
 
 That's it. The bot will generate synthetic price data and trade against it. Press `Ctrl+C` to stop — it prints a final PnL report on shutdown.
 
+### Docker (alternative)
+
+```bash
+# Build image (CPU-only torch, ~1.2 GB)
+docker build -t trading-bot .
+
+# Run paper mode
+docker run --rm trading-bot
+
+# Run live mode with custom config
+docker run --rm -v $(pwd)/config:/app/config trading-bot --mode live --config config/my_config.yaml
+```
+
 ## Architecture
 
 ```

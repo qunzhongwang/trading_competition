@@ -18,6 +18,11 @@ python main.py --mode live
 # Train LSTM model (fetches historical data from Binance, trains, exports ONNX)
 python -m models.train --symbols BTC/USDT --days 90 --device auto
 
+# Docker (CPU-only torch, smaller image)
+docker build -t trading-bot .
+docker run --rm trading-bot
+docker run --rm -v $(pwd)/config:/app/config trading-bot --mode live
+
 # No test suite or linter is configured yet
 ```
 

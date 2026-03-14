@@ -10,3 +10,4 @@ wheels/
 .venv
 
 project_spec.md
+.claude/
