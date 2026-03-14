@@ -27,7 +27,7 @@ alpha:
   engine: "rule_based"      # "rule_based" | "lstm" | "ensemble"
   entry_threshold: 0.6
   exit_threshold: -0.2
-  model_path: "config/model.onnx"
+  model_path: "artifacts/model.onnx"
   seq_len: 30               # LSTM lookback window
 
 strategy:

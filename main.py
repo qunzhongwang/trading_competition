@@ -12,6 +12,8 @@ import asyncio
 import logging
 import signal
 import sys
+from datetime import datetime
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Optional
 
@@ -30,12 +32,35 @@ from risk.risk_shield import RiskShield
 from risk.tracker import PortfolioTracker
 from strategy.monitor import StrategyMonitor
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    datefmt="%H:%M:%S",
-)
 logger = logging.getLogger(__name__)
+
+
+def setup_logging(mode: str = "paper") -> None:
+    """Configure console + rotating file logging."""
+    log_dir = Path("logs")
+    log_dir.mkdir(exist_ok=True)
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = log_dir / f"trading_{mode}_{ts}.log"
+
+    fmt = logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%H:%M:%S"
+    )
+
+    console = logging.StreamHandler()
+    console.setFormatter(fmt)
+
+    file_handler = RotatingFileHandler(
+        str(log_file), maxBytes=10 * 1024 * 1024, backupCount=5
+    )
+    file_handler.setFormatter(fmt)
+
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    root.addHandler(console)
+    root.addHandler(file_handler)
+
+    logger.info("Logging to %s", log_file)
 
 
 def load_config(path: str) -> dict:
@@ -179,4 +204,5 @@ if __name__ == "__main__":
     if args.mode:
         config["mode"] = args.mode
 
+    setup_logging(config.get("mode", "paper"))
     asyncio.run(main(config))

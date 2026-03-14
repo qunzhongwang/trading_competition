@@ -234,7 +234,7 @@ class TestModelWrapper:
         from models.model_wrapper import ModelWrapper
         import numpy as np
 
-        onnx_path = "config/model.onnx"
+        onnx_path = "artifacts/model.onnx"
         if not Path(onnx_path).exists():
             pytest.skip("ONNX model not generated yet")
 

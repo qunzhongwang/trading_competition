@@ -33,11 +33,38 @@ from core.models import OHLCV
 from features.extractor import FeatureExtractor
 from models.lstm_model import LSTMAlphaModel
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+from logging.handlers import RotatingFileHandler
+
 logger = logging.getLogger(__name__)
 
+
+def setup_train_logging() -> None:
+    """Configure console + rotating file logging for training runs."""
+    log_dir = Path("logs")
+    log_dir.mkdir(exist_ok=True)
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = log_dir / f"train_{ts}.log"
+
+    fmt = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+
+    console = logging.StreamHandler()
+    console.setFormatter(fmt)
+
+    file_handler = RotatingFileHandler(
+        str(log_file), maxBytes=10 * 1024 * 1024, backupCount=5
+    )
+    file_handler.setFormatter(fmt)
+
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    root.addHandler(console)
+    root.addHandler(file_handler)
+
+    logger.info("Training log: %s", log_file)
+
 HISTORICAL_DIR = Path("data/historical")
-CONFIG_DIR = Path("config")
+ARTIFACTS_DIR = Path("artifacts")
 
 
 # ── Data Fetching ───────────────────────────────────────────────────────────
@@ -209,6 +236,8 @@ def train_model(
     batch_size: int = 64,
     lr: float = 1e-3,
     device: str = "cpu",
+    use_amp: bool = False,
+    use_compile: bool = False,
 ) -> LSTMAlphaModel:
     """Train the LSTM model."""
     # Use GPU if available
@@ -217,6 +246,14 @@ def train_model(
     logger.info("Training on device: %s", device)
 
     model = LSTMAlphaModel(n_features=n_features).to(device)
+
+    if use_compile:
+        try:
+            model = torch.compile(model)
+            logger.info("torch.compile enabled")
+        except Exception as e:
+            logger.warning("torch.compile failed, using eager mode: %s", e)
+
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     criterion = nn.MSELoss()
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -228,6 +265,10 @@ def train_model(
     train_dl = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
     val_dl = DataLoader(val_ds, batch_size=batch_size)
 
+    scaler = torch.amp.GradScaler(enabled=use_amp)
+    if use_amp:
+        logger.info("Automatic mixed precision enabled")
+
     best_val_loss = float("inf")
     best_state = None
 
@@ -237,12 +278,15 @@ def train_model(
         train_loss = 0.0
         for xb, yb in train_dl:
             xb, yb = xb.to(device), yb.to(device)
-            pred = model(xb)
-            loss = criterion(pred, yb)
+            with torch.amp.autocast(device_type=device, enabled=use_amp):
+                pred = model(xb)
+                loss = criterion(pred, yb)
             optimizer.zero_grad()
-            loss.backward()
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            optimizer.step()
+            scaler.step(optimizer)
+            scaler.update()
             train_loss += loss.item() * len(xb)
         train_loss /= len(train_ds)
 
@@ -252,8 +296,9 @@ def train_model(
         with torch.no_grad():
             for xb, yb in val_dl:
                 xb, yb = xb.to(device), yb.to(device)
-                pred = model(xb)
-                val_loss += criterion(pred, yb).item() * len(xb)
+                with torch.amp.autocast(device_type=device, enabled=use_amp):
+                    pred = model(xb)
+                    val_loss += criterion(pred, yb).item() * len(xb)
         val_loss /= len(val_ds)
 
         scheduler.step(val_loss)
@@ -366,6 +411,7 @@ SYNTHETIC_PRESETS = {
 
 
 def main():
+    setup_train_logging()
     parser = argparse.ArgumentParser(description="Train LSTM alpha model")
     parser.add_argument("--symbols", nargs="+", default=["BTC/USDT"], help="Symbols to train on")
     parser.add_argument("--days", type=int, default=90, help="Days of history to fetch")
@@ -383,6 +429,8 @@ def main():
     )
     parser.add_argument("--n-candles", type=int, default=10000, help="Number of synthetic candles per symbol")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for synthetic data")
+    parser.add_argument("--amp", action="store_true", help="Enable automatic mixed precision (GPU recommended)")
+    parser.add_argument("--compile", action="store_true", help="Enable torch.compile (PyTorch 2.0+, GPU recommended)")
     args = parser.parse_args()
 
     feature_config = {
@@ -444,13 +492,13 @@ def main():
     )
 
     # Save PyTorch checkpoint
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    pt_path = str(CONFIG_DIR / "model.pt")
+    ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+    pt_path = str(ARTIFACTS_DIR / "model.pt")
     torch.save(model.state_dict(), pt_path)
     logger.info("Saved PyTorch model to %s", pt_path)
 
     # Export to ONNX
-    onnx_path = str(CONFIG_DIR / "model.onnx")
+    onnx_path = str(ARTIFACTS_DIR / "model.onnx")
     export_onnx(model, args.seq_len, extractor.N_FEATURES, onnx_path)
 
     logger.info("Done! Model ready at %s", onnx_path)

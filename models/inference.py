@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime
 from typing import List, Optional
 
@@ -44,6 +45,7 @@ class AlphaEngine:
 
     def score(self, candles: List[OHLCV]) -> Signal:
         """Generate alpha signal from candle history."""
+        t0 = time.perf_counter()
         features = self._extractor.extract(candles)
 
         if self._engine_type == "rule_based":
@@ -64,6 +66,11 @@ class AlphaEngine:
 
         # Clamp to [-1, 1]
         alpha = max(-1.0, min(1.0, alpha))
+
+        elapsed_ms = (time.perf_counter() - t0) * 1000
+        logger.debug(
+            "Alpha %s: %.4f (%.1fms, %s)", features.symbol, alpha, elapsed_ms, source
+        )
 
         return Signal(
             symbol=features.symbol,
