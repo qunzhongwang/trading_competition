@@ -1,0 +1,17 @@
+[project]
+name = "trading-competition"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "aiohttp>=3.13.3",
+    "ccxt>=4.5.43",
+    "numpy>=2.2.6",
+    "onnxruntime<1.19",
+    "pandas>=2.3.3",
+    "pydantic>=2.12.5",
+    "pyyaml>=6.0.3",
+    "torch>=2.10.0",
+    "websockets>=16.0",
+]

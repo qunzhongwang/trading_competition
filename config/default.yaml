@@ -1,0 +1,55 @@
+mode: "paper"  # "paper" | "live"
+
+symbols:
+  - "BTC/USDT"
+  - "ETH/USDT"
+
+exchange:
+  name: "binance"
+  ws_url: "wss://stream.binance.com:9443/ws"
+  api_key: ""
+  api_secret: ""
+
+data:
+  buffer_size: 500          # sliding window length (candles)
+  candle_interval: "1m"     # 1-minute candles
+  tick_buffer_size: 5000    # raw tick buffer
+
+features:
+  rsi_period: 14
+  ema_fast: 12
+  ema_slow: 26
+  atr_period: 14
+  volatility_window: 20
+  momentum_window: 10
+
+alpha:
+  engine: "rule_based"      # "rule_based" | "lstm" | "ensemble"
+  entry_threshold: 0.6
+  exit_threshold: -0.2
+  model_path: "config/model.onnx"
+  seq_len: 30               # LSTM lookback window
+
+strategy:
+  max_positions_per_symbol: 1
+  position_size_pct: 0.10   # 10% of portfolio per trade
+
+risk:
+  max_portfolio_exposure: 0.50
+  max_single_exposure: 0.15
+  trailing_stop_pct: 0.03
+  atr_stop_multiplier: 2.0
+  daily_drawdown_limit: 0.05
+  max_orders_per_minute: 10
+
+execution:
+  default_order_type: "market"
+  limit_offset_bps: 5
+  order_timeout_seconds: 30
+
+paper:
+  initial_capital: 100000.0
+  slippage_bps: 5
+  fee_bps: 10
+  replay_file: ""           # optional CSV for deterministic replay
+  speed_multiplier: 60.0    # 60x = 1 hour per minute of wall time
