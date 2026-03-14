@@ -286,7 +286,7 @@ Training integrates with [Weights & Biases](https://wandb.ai) via `--wandb`:
 python -m models.train --synthetic --device cuda --amp --compile --wandb --wandb-tags test
 ```
 
-Runs are auto-grouped by experiment config: `cuda_e50_10k_amp_compile_0314`. Tags distinguish `test` vs `deploy` runs. Metrics logged per epoch: train/val loss, learning rate, epoch time. Override defaults with `--wandb-entity`, `--wandb-project`, `--wandb-group`, `--wandb-name`.
+Runs are auto-grouped by experiment config like: `cuda_e50_10k_amp_compile_0314`. Tags distinguish `test` vs `deploy` runs. Metrics logged per epoch: train/val loss, learning rate, epoch time. Override defaults with `--wandb-entity`, `--wandb-project`, `--wandb-group`, `--wandb-name`.
 
 ## Tech Stack
 
