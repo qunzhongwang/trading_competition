@@ -112,7 +112,10 @@ class StrategyMonitor:
                 # ── Risk Validation ──
                 validated = self._risk_shield.validate(order, self._tracker)
                 if validated is not None:
-                    await self._order_manager.submit(validated)
+                    result = await self._order_manager.submit(validated)
+                else:
+                    # Risk rejected the order — reset strategy state
+                    strategy.on_cancel(order)
 
         # ── Post-trade Risk Checks ──
         # Trailing stops and ATR stops
