@@ -16,9 +16,10 @@ class ModelWrapper:
     PyTorch is the fallback.
     """
 
-    def __init__(self, model_path: str, n_features: int = 6):
+    def __init__(self, model_path: str, n_features: int = 6, use_compile: bool = False):
         self._model_path = model_path
         self._n_features = n_features
+        self._use_compile = use_compile
         self._backend: Optional[str] = None  # "onnx" or "pytorch"
         self._session = None  # onnxruntime.InferenceSession
         self._torch_model = None  # LSTMAlphaModel
@@ -50,6 +51,14 @@ class ModelWrapper:
         state_dict = torch.load(self._model_path, map_location="cpu", weights_only=True)
         model.load_state_dict(state_dict)
         model.eval()
+
+        if self._use_compile:
+            try:
+                model = torch.compile(model)
+                logger.info("torch.compile enabled for inference")
+            except Exception as e:
+                logger.warning("torch.compile failed for inference: %s", e)
+
         self._torch_model = model
         self._backend = "pytorch"
         logger.info("Loaded PyTorch model from %s", self._model_path)

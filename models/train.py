@@ -489,6 +489,8 @@ def main():
         batch_size=args.batch_size,
         lr=args.lr,
         device=args.device,
+        use_amp=args.amp,
+        use_compile=getattr(args, "compile", False),
     )
 
     # Save PyTorch checkpoint

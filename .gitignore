@@ -22,3 +22,5 @@ data/historical/
 logs/
 
 .pytest_cache/
+
+.coverage
