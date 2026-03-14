@@ -159,6 +159,9 @@ python -m models.train --symbols BTC/USDT --days 90 --device auto
 # GPU training with mixed precision and torch.compile
 python -m models.train --synthetic --symbols BTC/USDT ETH/USDT --device cuda --amp --compile
 
+# With wandb experiment tracking
+python -m models.train --synthetic --device cuda --amp --compile --wandb --wandb-tags test
+
 # Or use the script
 ./scripts/train.sh
 ```
@@ -166,10 +169,11 @@ python -m models.train --synthetic --symbols BTC/USDT ETH/USDT --device cuda --a
 **What happens:**
 
 1. Generates synthetic GBM candles (or fetches from Binance via ccxt with CSV caching)
-2. Computes feature sequences using `FeatureExtractor`
+2. Vectorized feature extraction — computes all features in one pass (~0.5s for 10k candles)
 3. Labels = forward 5-minute return, scaled to [-1, 1] via tanh
 4. Trains with MSE loss, chronological 80/20 split (no shuffle — time-series)
 5. Saves `artifacts/model.pt` (PyTorch) and `artifacts/model.onnx` (ONNX)
+6. Logs to wandb if `--wandb` is set (entity: `Base-Work-Space`, project: `trading-lstm`)
 
 Then switch the config:
 
@@ -274,6 +278,16 @@ Both trading and training sessions log to console + rotating files in `logs/`:
 
 Files rotate at 10MB with 5 backups.
 
+## Experiment Tracking
+
+Training integrates with [Weights & Biases](https://wandb.ai) via `--wandb`:
+
+```bash
+python -m models.train --synthetic --device cuda --amp --compile --wandb --wandb-tags test
+```
+
+Runs are auto-grouped by experiment config: `cuda_e50_10k_amp_compile_0314`. Tags distinguish `test` vs `deploy` runs. Metrics logged per epoch: train/val loss, learning rate, epoch time. Override defaults with `--wandb-entity`, `--wandb-project`, `--wandb-group`, `--wandb-name`.
+
 ## Tech Stack
 
 | Component | Choice | Why |
@@ -285,4 +299,5 @@ Files rotate at 10MB with 5 backups.
 | Indicators | `numpy` (pure) | Fast, no DataFrame overhead in hot path |
 | DL training | `torch` | GPU support, `torch.compile`, AMP mixed precision |
 | DL inference | `onnxruntime` | 2-5x faster than torch for single-sample CPU inference |
+| Experiment tracking | `wandb` | Loss curves, run grouping, hyperparameter comparison |
 | Config | `pyyaml` | Simple, human-readable |

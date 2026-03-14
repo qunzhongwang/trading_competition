@@ -27,6 +27,9 @@ python -m models.train --symbols BTC/USDT --days 90 --device auto
 # Train with GPU optimizations
 python -m models.train --synthetic --device cuda --amp --compile
 
+# Train with wandb experiment tracking
+python -m models.train --synthetic --device cuda --amp --compile --wandb --wandb-tags test
+
 # Generate synthetic CSV data for offline use
 ./scripts/generate_data.sh
 
@@ -97,7 +100,19 @@ Set `alpha.engine` in `config/default.yaml`:
 
 GPU flags: `--amp` (mixed precision via `torch.amp`), `--compile` (`torch.compile`). Both degrade gracefully on CPU.
 
+Dataset building uses vectorized feature extraction (computes all features once, then slices windows). 10k candles builds in ~0.5s vs ~13 min with the naive approach.
+
 Model artifacts save to `artifacts/model.pt` and `artifacts/model.onnx`.
+
+### Experiment tracking
+
+`--wandb` enables [Weights & Biases](https://wandb.ai) logging. Defaults: entity=`Base-Work-Space`, project=`trading-lstm`.
+
+- **Group**: auto-generated as `{device}_e{epochs}_{candles}{k|d}_{flags}_{MMDD}` (one group per day per experiment)
+- **Tags**: defaults to `test`; use `--wandb-tags deploy` for production runs
+- **Metrics logged**: `train/loss`, `val/loss`, `train/lr`, `train/epoch_time_s` per epoch, plus summary stats
+
+Override with `--wandb-entity`, `--wandb-project`, `--wandb-group`, `--wandb-name`, `--wandb-tags`.
 
 ### Logging
 
