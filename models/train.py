@@ -307,6 +307,64 @@ def export_onnx(model: LSTMAlphaModel, seq_len: int, n_features: int, path: str)
 
 # ── Main ────────────────────────────────────────────────────────────────────
 
+def generate_synthetic_ohlcv(
+    symbol: str = "BTC/USDT",
+    n_candles: int = 10_000,
+    start_price: float = 65000.0,
+    drift: float = 0.0001,
+    vol: float = 0.002,
+    base_volume: float = 50.0,
+    seed: int = 42,
+) -> List[OHLCV]:
+    """Generate synthetic OHLCV candles using geometric Brownian motion.
+
+    Useful for training when exchange APIs are unavailable.
+    """
+    import math
+    import random as _random
+
+    rng = _random.Random(seed)
+    candles = []
+    price = start_price
+    dt = 1.0 / 1440.0  # 1 minute as fraction of day
+    base_time = datetime(2025, 1, 1)
+
+    for i in range(n_candles):
+        dw = rng.gauss(0, 1)
+        returns = drift * dt + vol * math.sqrt(dt) * dw
+
+        open_price = price
+        close_price = price * (1 + returns)
+
+        intra_vol = abs(returns) + vol * math.sqrt(dt) * 0.5
+        high_price = max(open_price, close_price) * (1 + abs(rng.gauss(0, intra_vol)))
+        low_price = min(open_price, close_price) * (1 - abs(rng.gauss(0, intra_vol)))
+
+        volume = base_volume * (1 + abs(rng.gauss(0, 0.5)))
+
+        candles.append(OHLCV(
+            symbol=symbol,
+            open=round(open_price, 2),
+            high=round(high_price, 2),
+            low=round(low_price, 2),
+            close=round(close_price, 2),
+            volume=round(volume, 4),
+            timestamp=base_time + timedelta(minutes=i),
+            is_closed=True,
+        ))
+        price = close_price
+
+    logger.info("Generated %d synthetic candles for %s (seed=%d)", n_candles, symbol, seed)
+    return candles
+
+
+# Presets for synthetic data generation
+SYNTHETIC_PRESETS = {
+    "BTC/USDT": {"start_price": 65000.0, "drift": 0.0001, "vol": 0.002, "base_volume": 50.0},
+    "ETH/USDT": {"start_price": 3500.0, "drift": 0.00015, "vol": 0.003, "base_volume": 500.0},
+}
+
+
 def main():
     parser = argparse.ArgumentParser(description="Train LSTM alpha model")
     parser.add_argument("--symbols", nargs="+", default=["BTC/USDT"], help="Symbols to train on")
@@ -319,6 +377,12 @@ def main():
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
     parser.add_argument("--device", default="auto", help="Device: cpu, cuda, auto")
     parser.add_argument("--val-split", type=float, default=0.2, help="Validation split ratio")
+    parser.add_argument(
+        "--synthetic", action="store_true",
+        help="Use synthetic GBM data instead of fetching from exchange (no API needed)",
+    )
+    parser.add_argument("--n-candles", type=int, default=10000, help="Number of synthetic candles per symbol")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed for synthetic data")
     args = parser.parse_args()
 
     feature_config = {
@@ -337,8 +401,22 @@ def main():
 
     for symbol in args.symbols:
         logger.info("=== Processing %s ===", symbol)
-        raw_data = fetch_ohlcv(symbol, args.interval, args.days)
-        candles = raw_to_ohlcv(raw_data, symbol)
+
+        if args.synthetic:
+            preset = SYNTHETIC_PRESETS.get(symbol, {})
+            candles = generate_synthetic_ohlcv(
+                symbol=symbol,
+                n_candles=args.n_candles,
+                start_price=preset.get("start_price", 1000.0),
+                drift=preset.get("drift", 0.0001),
+                vol=preset.get("vol", 0.002),
+                base_volume=preset.get("base_volume", 100.0),
+                seed=args.seed,
+            )
+        else:
+            raw_data = fetch_ohlcv(symbol, args.interval, args.days)
+            candles = raw_to_ohlcv(raw_data, symbol)
+
         logger.info("Got %d candles for %s", len(candles), symbol)
 
         X, y = build_dataset(candles, extractor, args.seq_len, args.forward_window)
