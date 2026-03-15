@@ -20,7 +20,7 @@ from typing import Optional
 import yaml
 
 from data.buffer import LiveBuffer
-from data.connector import WSConnector
+from data.connector import WSConnector, BinanceSupplementaryFeed
 from data.sim_feed import SimulatedFeed
 from execution.executor import LiveExecutor
 from execution.order_manager import OrderManager
@@ -153,13 +153,17 @@ async def main(config: dict) -> None:
     # ── Run ──
     logger.info("Starting trading loop...")
 
+    # 10. Supplementary Binance data feed (order book, funding, taker ratio)
+    supp_feed = BinanceSupplementaryFeed(config.get("symbols", []), buffer)
+
     async def run_with_shutdown():
         feed_task = asyncio.create_task(feed.start())
         monitor_task = asyncio.create_task(monitor.run())
+        supp_task = asyncio.create_task(supp_feed.start())
 
         # Wait for shutdown signal or task completion
         done, pending = await asyncio.wait(
-            [feed_task, monitor_task, asyncio.create_task(shutdown_event.wait())],
+            [feed_task, monitor_task, supp_task, asyncio.create_task(shutdown_event.wait())],
             return_when=asyncio.FIRST_COMPLETED,
         )
 
@@ -167,6 +171,7 @@ async def main(config: dict) -> None:
         logger.info("Shutting down...")
         await monitor.stop()
         await feed.stop()
+        await supp_feed.stop()
 
         for task in pending:
             task.cancel()

@@ -98,11 +98,12 @@ class StrategyMonitor:
                 continue
 
             # ── Feature Extraction ──
-            features = self._extractor.extract(candles)
+            supplementary = await self._buffer.get_supplementary(symbol)
+            features = self._extractor.extract(candles, supplementary=supplementary)
             atr_values[symbol] = features.atr
 
             # ── Alpha Scoring ──
-            signal = self._alpha_engine.score(candles)
+            signal = self._alpha_engine.score(candles, supplementary=supplementary)
 
             # ── Strategy Decision ──
             snapshot = self._tracker.snapshot()

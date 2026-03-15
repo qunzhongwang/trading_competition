@@ -95,3 +95,113 @@ class WSConnector:
             is_closed=k.get("x", False),
         )
         await self._buffer.push_candle(candle)
+
+
+class BinanceSupplementaryFeed:
+    """Supplementary data feed from free public Binance API.
+
+    Collects: order book depth, funding rate, taker buy/sell ratio.
+    All endpoints are free and require no API key.
+    """
+
+    SPOT_WS_URL = "wss://stream.binance.com:9443/ws"
+    FUTURES_WS_URL = "wss://fstream.binance.com/ws"
+    FUTURES_REST_URL = "https://fapi.binance.com"
+
+    def __init__(self, symbols: list, buffer: LiveBuffer):
+        self._symbols = symbols
+        self._buffer = buffer
+        self._running = False
+
+    async def start(self) -> None:
+        self._running = True
+        tasks = [
+            asyncio.create_task(self._listen_depth()),
+            asyncio.create_task(self._listen_funding()),
+            asyncio.create_task(self._poll_taker_ratio()),
+        ]
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def stop(self) -> None:
+        self._running = False
+
+    async def _listen_depth(self) -> None:
+        """Subscribe to order book depth for all symbols."""
+        streams = "/".join(
+            f"{s.replace('/', '').lower()}@depth20@100ms" for s in self._symbols
+        )
+        url = f"{self.SPOT_WS_URL}/{streams}"
+
+        while self._running:
+            try:
+                async with websockets.connect(url) as ws:
+                    logger.info("Depth WS connected: %d symbols", len(self._symbols))
+                    while self._running:
+                        msg = await asyncio.wait_for(ws.recv(), timeout=30)
+                        data = json.loads(msg)
+                        # Combined stream format: {"stream": "...", "data": {...}}
+                        if "data" in data:
+                            data = data["data"]
+                        # Convert stream name back to symbol
+                        symbol = self._stream_to_symbol(data.get("s", ""))
+                        if symbol:
+                            await self._buffer.push_depth(
+                                symbol, data.get("bids", []), data.get("asks", [])
+                            )
+            except Exception as e:
+                logger.warning("Depth WS error: %s, reconnecting...", e)
+                await asyncio.sleep(5)
+
+    async def _listen_funding(self) -> None:
+        """Subscribe to mark price stream for funding rate."""
+        streams = "/".join(
+            f"{s.replace('/', '').lower()}@markPrice@1s" for s in self._symbols
+        )
+        url = f"{self.FUTURES_WS_URL}/{streams}"
+
+        while self._running:
+            try:
+                async with websockets.connect(url) as ws:
+                    logger.info("Funding WS connected: %d symbols", len(self._symbols))
+                    while self._running:
+                        msg = await asyncio.wait_for(ws.recv(), timeout=30)
+                        data = json.loads(msg)
+                        if "data" in data:
+                            data = data["data"]
+                        symbol = self._stream_to_symbol(data.get("s", ""))
+                        if symbol:
+                            rate = float(data.get("r", 0.0))
+                            await self._buffer.push_funding(symbol, rate)
+            except Exception as e:
+                logger.warning("Funding WS error: %s, reconnecting...", e)
+                await asyncio.sleep(5)
+
+    async def _poll_taker_ratio(self) -> None:
+        """Poll taker long/short ratio every 5 minutes."""
+        import aiohttp
+
+        while self._running:
+            try:
+                async with aiohttp.ClientSession() as session:
+                    for symbol in self._symbols:
+                        api_symbol = symbol.replace("/", "")
+                        url = (
+                            f"{self.FUTURES_REST_URL}/futures/data/takerlongshortRatio"
+                            f"?symbol={api_symbol}&period=5m&limit=1"
+                        )
+                        async with session.get(url) as resp:
+                            if resp.status == 200:
+                                data = await resp.json()
+                                if data:
+                                    ratio = float(data[0].get("buySellRatio", 1.0))
+                                    await self._buffer.push_taker_ratio(symbol, ratio)
+            except Exception as e:
+                logger.warning("Taker ratio poll error: %s", e)
+            await asyncio.sleep(300)  # 5 minutes
+
+    def _stream_to_symbol(self, raw_symbol: str) -> str:
+        """Convert Binance symbol (BTCUSDT) to our format (BTC/USDT)."""
+        for sym in self._symbols:
+            if sym.replace("/", "") == raw_symbol:
+                return sym
+        return ""

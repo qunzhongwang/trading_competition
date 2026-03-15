@@ -57,7 +57,7 @@ class TestBuildDataset:
         X, y = build_dataset(candles, extractor, seq_len=30, forward_window=5)
         assert X.ndim == 3
         assert X.shape[1] == 30  # seq_len
-        assert X.shape[2] == 6   # n_features
+        assert X.shape[2] == 10  # n_features
         assert y.shape == (len(X), 1)
 
     def test_custom_forward_window(self, extractor):

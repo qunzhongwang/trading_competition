@@ -9,16 +9,16 @@ class LSTMAlphaModel(nn.Module):
 
     Architecture:
         Input: (batch, seq_len, n_features)
-        → LSTM(n_features, hidden_size=64, num_layers=2, dropout=0.2)
+        → LSTM(n_features, hidden_size=128, num_layers=2, dropout=0.2)
         → Last hidden state
-        → Linear(64, 32) → ReLU → Dropout(0.2) → Linear(32, 1) → Tanh
+        → Linear(128, 32) → ReLU → Dropout(0.2) → Linear(32, 1) → Tanh
         Output: alpha score in [-1, 1]
     """
 
     def __init__(
         self,
-        n_features: int = 6,
-        hidden_size: int = 64,
+        n_features: int = 10,
+        hidden_size: int = 128,
         num_layers: int = 2,
         dropout: float = 0.2,
     ):
