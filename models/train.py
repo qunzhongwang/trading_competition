@@ -355,19 +355,30 @@ def _compute_all_features(candles: List[OHLCV], extractor: FeatureExtractor) -> 
     features[min_c:, 4] = mom_all[min_c:]
     features[min_c:, 5] = vol_all[min_c:]
 
-    # Volume ratio: current volume / rolling average (feature index 7)
+    # Volume ratio: current volume / rolling average (feature index 7, vectorized)
     vol_ratio_window = 24
     if n_features > 7:
         cum_vol = np.cumsum(volumes)
-        for i in range(vol_ratio_window + 1, n):
-            avg_vol = (cum_vol[i - 1] - cum_vol[max(0, i - 1 - vol_ratio_window)]) / vol_ratio_window
-            if avg_vol > 1e-10:
-                features[i, 7] = volumes[i] / avg_vol
-            else:
-                features[i, 7] = 1.0
+        # rolling avg = (cum_vol[i-1] - cum_vol[i-1-window]) / window
+        start = vol_ratio_window + 1
+        if start < n:
+            idx = np.arange(start, n)
+            avg_vol = (cum_vol[idx - 1] - cum_vol[idx - 1 - vol_ratio_window]) / vol_ratio_window
+            safe_avg = np.where(avg_vol > 1e-10, avg_vol, 1.0)
+            features[start:, 7] = np.where(avg_vol > 1e-10, volumes[start:] / safe_avg, 1.0)
 
-    # Features 6 (order_book_imbalance), 8 (funding_rate), 9 (taker_ratio)
-    # remain zero in offline training — only populated during live inference
+    # Synthetic supplementary features for training (indices 6, 8, 9)
+    # In live mode these come from Binance feeds. During training we generate
+    # realistic synthetic values so the model learns to use them, avoiding
+    # a train/test distribution mismatch where they'd always be zero.
+    if n_features > 9:
+        rng = np.random.RandomState(42)
+        # order_book_imbalance: centered around 1.0, range ~[0.5, 2.0]
+        features[min_c:, 6] = rng.lognormal(0.0, 0.3, n - min_c).astype(np.float32)
+        # funding_rate: small values centered around 0, range ~[-0.001, 0.001]
+        features[min_c:, 8] = rng.normal(0.0001, 0.0003, n - min_c).astype(np.float32)
+        # taker_ratio: centered around 1.0, range ~[0.6, 1.6]
+        features[min_c:, 9] = rng.lognormal(0.0, 0.2, n - min_c).astype(np.float32)
 
     return features
 
@@ -509,7 +520,7 @@ def train_model(
         train_loss /= len(train_ds)
 
         # Validate
-        model.train(False)
+        model.eval()
         val_loss = 0.0
         criterion_val = nn.MSELoss()
         with torch.no_grad():

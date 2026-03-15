@@ -36,8 +36,8 @@ strategy:
   base_size_pct: 0.05       # Half-Kelly floor
   max_size_pct: 0.15        # Half-Kelly ceiling
   kelly_fraction: 0.5       # half-Kelly multiplier
-  estimated_win_rate: 0.55  # conservative prior
-  estimated_payoff: 1.5     # avg_win / avg_loss
+  estimated_win_rate: 0.55  # prior — calibrate from backtest results
+  estimated_payoff: 1.5     # avg_win / avg_loss — calibrate from backtest results
   urgent_alpha_threshold: 0.85  # alpha above this → market order
 
 risk:
@@ -46,7 +46,7 @@ risk:
   trailing_stop_pct: 0.03
   atr_stop_multiplier: 2.0
   daily_drawdown_limit: 0.05
-  max_orders_per_minute: 60  # was 10, now supports 66 symbols
+  max_orders_per_minute: 20  # per-symbol rate limit (Binance allows 10/s but be conservative)
 
 execution:
   default_order_type: "market"

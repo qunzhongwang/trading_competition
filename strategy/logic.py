@@ -43,6 +43,8 @@ class StrategyLogic:
         self._win_rate: float = strategy_cfg.get("estimated_win_rate", 0.55)
         self._payoff_ratio: float = strategy_cfg.get("estimated_payoff", 1.5)
         self._urgent_alpha_threshold: float = strategy_cfg.get("urgent_alpha_threshold", 0.85)
+        exec_cfg = config.get("execution", {})
+        self._limit_offset_bps: float = exec_cfg.get("limit_offset_bps", 5)
 
     @property
     def state(self) -> StrategyState:
@@ -75,7 +77,7 @@ class StrategyLogic:
                     order_type_label = "MARKET"
                 else:
                     order_type = OrderType.LIMIT
-                    price = round(current_price * 1.0005, 8)  # small offset above current
+                    price = round(current_price * (1 + self._limit_offset_bps / 10000), 8)
                     order_type_label = "LIMIT"
 
                 self._state = StrategyState.LONG_PENDING

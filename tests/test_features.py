@@ -123,7 +123,9 @@ class TestExtractSequence:
         seq = extractor.extract_sequence(candles_120, seq_len=30)
         # Each column should have mean ≈ 0, std ≈ 1
         # Columns 6,8,9 (order_book_imbalance, funding_rate, taker_ratio) are
-        # constant 0 in test data, so only check the original 6 features.
+        # constant 0 in test data. Column 7 (volume_ratio) is computed from
+        # candle data but may be constant in synthetic test candles.
+        # Only check the original 6 core features.
         for col in range(6):
             assert abs(seq[:, col].mean()) < 0.5
             assert 0.5 < seq[:, col].std() < 2.0
