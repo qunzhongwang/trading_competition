@@ -76,12 +76,14 @@ Test modules cover: Pydantic models, feature extraction (RSI/EMA/ATR/momentum/vo
 
 ```
 [WSConnector / SimFeed]  ── push_candle ──>  [LiveBuffer]  ── event.set() ──>  [StrategyMonitor]
-                                                                                      |
+                                                  |                                     |
+[BinanceSupplementaryFeed] ── push_depth/funding/taker ──>  │                           |
+                                                                                        |
         FeatureExtractor ─┬─ extract()          → rule-based score ─┐                 |
-                          └─ extract_sequence() → LSTM forward pass ─┤→ AlphaEngine → Signal
+         (10 features)    └─ extract_sequence() → LSTM forward pass ─┤→ AlphaEngine → Signal
                                                                      |
                                   StrategyLogic → RiskShield → OrderManager → Executor
-                                                                                  |
+                                  (Half-Kelly)   (stops)       (market/limit)     |
                                   check_stops()                    PortfolioTracker.on_fill()
 ```
 
@@ -99,19 +101,19 @@ trading-competition/
 ├── core/
 │   └── models.py               # Pydantic data models (Tick, OHLCV, Signal, Order, Position)
 ├── data/
-│   ├── buffer.py               # asyncio.Event-driven sliding window for candles
-│   ├── connector.py            # Binance WebSocket connector (live mode)
+│   ├── buffer.py               # asyncio.Event-driven sliding window for candles + supplementary data
+│   ├── connector.py            # Binance WebSocket connector (live) + BinanceSupplementaryFeed
 │   ├── sim_feed.py             # Synthetic GBM candle generator (paper mode)
 │   └── historical/             # Cached CSV from ccxt (auto-created by training script)
 ├── features/
-│   └── extractor.py            # OHLCV → technical indicators (RSI, EMA, ATR, momentum, vol)
+│   └── extractor.py            # OHLCV → 10 features (RSI, EMA, ATR, momentum, vol, OB imbalance, vol ratio, funding, taker ratio)
 ├── models/
-│   ├── lstm_model.py           # PyTorch LSTM architecture (2-layer, 64 hidden)
+│   ├── lstm_model.py           # PyTorch LSTM architecture (2-layer, 128 hidden, 10 features)
 │   ├── model_wrapper.py        # Loads .onnx or .pt model for inference
 │   ├── inference.py            # AlphaEngine: rule-based / lstm / ensemble scoring
-│   └── train.py                # Offline training script (synthetic or Binance data → train → ONNX)
+│   └── train.py                # Offline training script (walk-forward validation, recency weighting)
 ├── strategy/
-│   ├── logic.py                # Per-symbol state machine (FLAT → LONG_PENDING → HOLDING)
+│   ├── logic.py                # Per-symbol state machine + Half-Kelly sizing + market/limit order selection
 │   └── monitor.py              # Central event loop / orchestrator
 ├── risk/
 │   ├── risk_shield.py          # Pre-trade validation, trailing stop, ATR stop, circuit breaker
@@ -159,6 +161,9 @@ python -m models.train --symbols BTC/USDT --days 90 --device auto
 # GPU training with mixed precision and torch.compile
 python -m models.train --synthetic --symbols BTC/USDT ETH/USDT --device cuda --amp --compile
 
+# Walk-forward validation with recency weighting
+python -m models.train --symbols BTC/USDT --days 90 --walk-forward --recency-half-life 35 --device cuda --amp
+
 # With wandb experiment tracking
 python -m models.train --synthetic --device cuda --amp --compile --wandb --wandb-tags test
 
@@ -169,11 +174,12 @@ python -m models.train --synthetic --device cuda --amp --compile --wandb --wandb
 **What happens:**
 
 1. Generates synthetic GBM candles (or fetches from Binance via ccxt with CSV caching)
-2. Vectorized feature extraction — computes all features in one pass (~0.5s for 10k candles)
-3. Labels = forward 5-minute return, scaled to [-1, 1] via tanh
-4. Trains with MSE loss, chronological 80/20 split (no shuffle — time-series)
-5. Saves `artifacts/model.pt` (PyTorch) and `artifacts/model.onnx` (ONNX)
-6. Logs to wandb if `--wandb` is set (entity: `Base-Work-Space`, project: `trading-lstm`)
+2. Vectorized feature extraction — computes all 10 features in one pass (~0.5s for 10k candles)
+3. Labels = forward return (configurable via `--forward-window`), scaled to [-1, 1] via tanh
+4. Trains with MSE loss (optionally recency-weighted), chronological split (no shuffle — time-series)
+5. Walk-forward validation available: train 0-60%, val 60-80%, test 80-100%
+6. Saves `artifacts/model.pt` (PyTorch) and `artifacts/model.onnx` (ONNX)
+7. Logs to wandb if `--wandb` is set (entity: `Base-Work-Space`, project: `trading-lstm`)
 
 Then switch the config:
 
@@ -205,7 +211,7 @@ The LSTM model can be trained offline and swapped in via one config change (`alp
 ### Why LSTM specifically?
 
 - Crypto price series have temporal dependencies (momentum regimes, mean-reversion cycles)
-- 2-layer LSTM with 64 hidden units gives sub-millisecond CPU inference
+- 2-layer LSTM with 128 hidden units gives sub-millisecond CPU inference
 - Well-understood, debuggable — no black-box risk during competition
 - ONNX export decouples inference from PyTorch for faster runtime
 
@@ -235,6 +241,16 @@ alpha:
   entry_threshold: 0.6      # alpha > this → buy
   exit_threshold: -0.2      # alpha < this → sell
   model_path: "artifacts/model.onnx"
+  seq_len: 60               # LSTM lookback window (60 × 1m = 1 hour)
+
+# Position sizing (Half-Kelly)
+strategy:
+  base_size_pct: 0.05       # minimum allocation (5% of NAV)
+  max_size_pct: 0.15        # maximum allocation (15% of NAV)
+  kelly_fraction: 0.5       # half-Kelly multiplier
+  estimated_win_rate: 0.55   # conservative prior
+  estimated_payoff: 1.5      # avg_win / avg_loss
+  urgent_alpha_threshold: 0.85  # alpha above this → market order (below → limit order)
 
 # Risk limits
 risk:
@@ -243,10 +259,12 @@ risk:
   daily_drawdown_limit: 0.05      # 5% daily drawdown → circuit breaker halts all trading
   max_portfolio_exposure: 0.50    # max 50% of NAV in positions
   max_single_exposure: 0.15       # max 15% of NAV per symbol
+  max_orders_per_minute: 60       # rate limit (supports 66 symbols)
 
-# Position sizing
-strategy:
-  position_size_pct: 0.10   # 10% of portfolio per trade
+# Execution fees
+execution:
+  fee_market_bps: 10        # 0.1% taker fee (market orders)
+  fee_limit_bps: 5          # 0.05% maker fee (limit orders)
 
 # Paper mode settings
 paper:
@@ -255,6 +273,34 @@ paper:
   fee_bps: 10
   speed_multiplier: 60.0    # 60x = 1 hour of candles per minute of wall time
 ```
+
+## Position Sizing
+
+Uses Half-Kelly criterion scaled by alpha signal conviction:
+
+| Alpha Score | Position Size |
+|-------------|--------------|
+| 0.61 (barely above threshold) | ~5.0% of NAV |
+| 0.80 (moderate conviction) | ~6.3% of NAV |
+| 1.00 (maximum conviction) | ~7.5% of NAV |
+
+## Order Type Selection
+
+- **Alpha > 0.85** or risk/stop exits: Market order (0.1% fee, guaranteed fill)
+- **Alpha 0.6-0.85**: Limit order (0.05% fee, saves costs on non-urgent entries)
+
+## Supplementary Data Feeds
+
+In addition to the competition exchange price data, the system collects free public Binance data:
+
+| Feature | Source | Update Frequency |
+|---------|--------|-----------------|
+| Order book imbalance | WS `{symbol}@depth20@100ms` | 100ms |
+| Volume ratio | Computed from candle data | Per candle |
+| Funding rate | WS `{symbol}@markPrice@1s` | 1s |
+| Taker buy/sell ratio | REST `/futures/data/takerlongshortRatio` | 5m poll |
+
+All endpoints are free, require no API key, and fail gracefully (features default to neutral values).
 
 ## Risk Management
 
@@ -265,7 +311,7 @@ Three layers of protection, in order of trigger speed:
 3. **Circuit Breaker (portfolio-wide):** If daily drawdown exceeds 5%, halt ALL new buys and liquidate all positions. Resets daily.
 
 Pre-trade checks also enforce:
-- Rate limit: max 10 orders/minute
+- Rate limit: max 60 orders/minute
 - Exposure caps: 50% total portfolio, 15% per symbol
 - Long-only: rejects any order that would create a short
 - Cash check: won't buy more than you can afford
