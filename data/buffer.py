@@ -23,6 +23,9 @@ class LiveBuffer:
         self._max_ticks = max_ticks
         self._candles: Dict[str, deque] = {}  # symbol → deque[OHLCV]
         self._ticks: Dict[str, deque] = {}  # symbol → deque[Tick]
+        self._depth_data: Dict[str, dict] = {}  # latest order book imbalance per symbol
+        self._funding_data: Dict[str, float] = {}  # latest funding rate per symbol
+        self._taker_data: Dict[str, float] = {}  # latest taker ratio per symbol
         self._lock = asyncio.Lock()
         self._event = asyncio.Event()
 
@@ -74,6 +77,34 @@ class LiveBuffer:
             return True
         except asyncio.TimeoutError:
             return False
+
+    async def push_depth(self, symbol: str, bids: list, asks: list) -> None:
+        """Store order book imbalance from depth snapshot."""
+        async with self._lock:
+            bid_volume = sum(float(b[1]) for b in bids[:10]) if bids else 0.0
+            ask_volume = sum(float(a[1]) for a in asks[:10]) if asks else 0.0
+            imbalance = bid_volume / ask_volume if ask_volume > 1e-10 else 1.0
+            self._depth_data[symbol] = {"order_book_imbalance": imbalance}
+
+    async def push_funding(self, symbol: str, rate: float) -> None:
+        """Store latest funding rate."""
+        async with self._lock:
+            self._funding_data[symbol] = rate
+
+    async def push_taker_ratio(self, symbol: str, ratio: float) -> None:
+        """Store latest taker buy/sell ratio."""
+        async with self._lock:
+            self._taker_data[symbol] = ratio
+
+    async def get_supplementary(self, symbol: str) -> dict:
+        """Get all supplementary data for a symbol."""
+        async with self._lock:
+            depth = self._depth_data.get(symbol, {})
+            return {
+                "order_book_imbalance": depth.get("order_book_imbalance", 0.0),
+                "funding_rate": self._funding_data.get(symbol, 0.0),
+                "taker_ratio": self._taker_data.get(symbol, 0.0),
+            }
 
     def candle_count(self, symbol: str) -> int:
         return len(self._candles.get(symbol, deque()))

@@ -16,7 +16,7 @@ class ModelWrapper:
     PyTorch is the fallback.
     """
 
-    def __init__(self, model_path: str, n_features: int = 6, use_compile: bool = False):
+    def __init__(self, model_path: str, n_features: int = 10, use_compile: bool = False):
         self._model_path = model_path
         self._n_features = n_features
         self._use_compile = use_compile

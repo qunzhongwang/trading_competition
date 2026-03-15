@@ -43,20 +43,20 @@ class AlphaEngine:
         self._w_ema = 0.3
         self._w_vol_penalty = 0.1
 
-    def score(self, candles: List[OHLCV]) -> Signal:
+    def score(self, candles: List[OHLCV], supplementary: Optional[dict] = None) -> Signal:
         """Generate alpha signal from candle history."""
         t0 = time.perf_counter()
-        features = self._extractor.extract(candles)
+        features = self._extractor.extract(candles, supplementary=supplementary)
 
         if self._engine_type == "rule_based":
             alpha = self._rule_based_score(features)
             source = "rule_based"
         elif self._engine_type == "lstm":
-            alpha = self._lstm_score(candles)
+            alpha = self._lstm_score(candles, supplementary)
             source = "lstm"
         elif self._engine_type == "ensemble":
             rule_alpha = self._rule_based_score(features)
-            lstm_alpha = self._lstm_score(candles)
+            lstm_alpha = self._lstm_score(candles, supplementary)
             alpha = 0.5 * rule_alpha + 0.5 * lstm_alpha
             source = "ensemble"
         else:
@@ -114,13 +114,13 @@ class AlphaEngine:
 
         return alpha
 
-    def _lstm_score(self, candles: List[OHLCV]) -> float:
+    def _lstm_score(self, candles: List[OHLCV], supplementary: Optional[dict] = None) -> float:
         """Run LSTM inference on feature sequence."""
         if self._model is None or not self._model.is_loaded:
             logger.warning("LSTM model not loaded, returning 0.0")
             return 0.0
 
-        seq = self._extractor.extract_sequence(candles, seq_len=self._seq_len)
+        seq = self._extractor.extract_sequence(candles, seq_len=self._seq_len, supplementary=supplementary)
         return self._model.predict(seq)
 
     @property

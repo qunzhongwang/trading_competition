@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import List
+from typing import List, Optional
 
 import numpy as np
 
@@ -18,7 +18,8 @@ class FeatureExtractor:
     """
 
     # Feature names in the order used by extract_sequence()
-    FEATURE_NAMES = ["rsi", "ema_fast", "ema_slow", "atr", "momentum", "volatility"]
+    FEATURE_NAMES = ["rsi", "ema_fast", "ema_slow", "atr", "momentum", "volatility",
+                     "order_book_imbalance", "volume_ratio", "funding_rate", "taker_ratio"]
     N_FEATURES = len(FEATURE_NAMES)
 
     def __init__(self, config: dict):
@@ -35,7 +36,7 @@ class FeatureExtractor:
         return max(self._rsi_period, self._ema_slow, self._atr_period,
                    self._momentum_window, self._volatility_window) + 2
 
-    def extract(self, candles: List[OHLCV]) -> FeatureVector:
+    def extract(self, candles: List[OHLCV], supplementary: Optional[dict] = None) -> FeatureVector:
         """Compute features for the most recent candle."""
         if len(candles) < self.min_candles:
             logger.warning(
@@ -48,6 +49,8 @@ class FeatureExtractor:
             )
 
         closes = [c.close for c in candles]
+        volume_ratio = self.compute_volume_ratio(candles)
+        supp = supplementary or {}
 
         return FeatureVector(
             symbol=candles[-1].symbol,
@@ -58,9 +61,14 @@ class FeatureExtractor:
             atr=self.compute_atr(candles, self._atr_period),
             momentum=self.compute_momentum(closes, self._momentum_window),
             volatility=self.compute_volatility(closes, self._volatility_window),
+            order_book_imbalance=supp.get("order_book_imbalance", 0.0),
+            volume_ratio=volume_ratio,
+            funding_rate=supp.get("funding_rate", 0.0),
+            taker_ratio=supp.get("taker_ratio", 0.0),
         )
 
-    def extract_sequence(self, candles: List[OHLCV], seq_len: int = 30) -> np.ndarray:
+    def extract_sequence(self, candles: List[OHLCV], seq_len: int = 30,
+                         supplementary: Optional[dict] = None) -> np.ndarray:
         """Extract a (seq_len, n_features) normalized array for LSTM input.
 
         Computes features at each timestep in the window, then z-score normalizes
@@ -80,10 +88,12 @@ class FeatureExtractor:
             # Window ending at candle[-(seq_len - i)]
             end_idx = len(candles) - (seq_len - 1 - i)
             window = candles[:end_idx]
-            fv = self.extract(window)
+            fv = self.extract(window, supplementary=supplementary)
             features.append([
                 fv.rsi, fv.ema_fast, fv.ema_slow,
                 fv.atr, fv.momentum, fv.volatility,
+                fv.order_book_imbalance, fv.volume_ratio,
+                fv.funding_rate, fv.taker_ratio,
             ])
 
         arr = np.array(features, dtype=np.float32)
@@ -164,3 +174,14 @@ class FeatureExtractor:
         prices = np.where(prices <= 0, 1e-10, prices)  # safety
         log_returns = np.diff(np.log(prices))
         return float(np.std(log_returns))
+
+    @staticmethod
+    def compute_volume_ratio(candles: List[OHLCV], window: int = 24) -> float:
+        """Current candle volume / rolling average volume."""
+        if len(candles) < window + 1:
+            return 1.0
+        volumes = [c.volume for c in candles[-(window + 1):-1]]
+        avg = sum(volumes) / len(volumes) if volumes else 1.0
+        if avg < 1e-10:
+            return 1.0
+        return candles[-1].volume / avg

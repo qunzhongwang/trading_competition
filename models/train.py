@@ -267,15 +267,20 @@ def raw_to_ohlcv(raw_data: List[list], symbol: str) -> List[OHLCV]:
 def _compute_all_features(candles: List[OHLCV], extractor: FeatureExtractor) -> np.ndarray:
     """Compute features for every candle using vectorized numpy.
 
-    Returns: (N, 6) array — [rsi, ema_fast, ema_slow, atr, momentum, volatility].
+    Returns: (N, n_features) array — [rsi, ema_fast, ema_slow, atr, momentum, volatility,
+    order_book_imbalance, volume_ratio, funding_rate, taker_ratio].
     Rows before min_candles are zero-filled.
+    Note: order_book_imbalance, funding_rate, taker_ratio are zero in offline training
+    (only available during live trading via supplementary feeds).
     """
     n = len(candles)
+    n_features = extractor.N_FEATURES
     closes = np.array([c.close for c in candles], dtype=np.float64)
     highs = np.array([c.high for c in candles], dtype=np.float64)
     lows = np.array([c.low for c in candles], dtype=np.float64)
+    volumes = np.array([c.volume for c in candles], dtype=np.float64)
 
-    features = np.zeros((n, 6), dtype=np.float32)
+    features = np.zeros((n, n_features), dtype=np.float32)
     min_c = extractor.min_candles
 
     # ── RSI: rolling gains/losses ──
@@ -350,6 +355,20 @@ def _compute_all_features(candles: List[OHLCV], extractor: FeatureExtractor) -> 
     features[min_c:, 4] = mom_all[min_c:]
     features[min_c:, 5] = vol_all[min_c:]
 
+    # Volume ratio: current volume / rolling average (feature index 7)
+    vol_ratio_window = 24
+    if n_features > 7:
+        cum_vol = np.cumsum(volumes)
+        for i in range(vol_ratio_window + 1, n):
+            avg_vol = (cum_vol[i - 1] - cum_vol[max(0, i - 1 - vol_ratio_window)]) / vol_ratio_window
+            if avg_vol > 1e-10:
+                features[i, 7] = volumes[i] / avg_vol
+            else:
+                features[i, 7] = 1.0
+
+    # Features 6 (order_book_imbalance), 8 (funding_rate), 9 (taker_ratio)
+    # remain zero in offline training — only populated during live inference
+
     return features
 
 
@@ -416,15 +435,16 @@ def train_model(
     y_train: np.ndarray,
     X_val: np.ndarray,
     y_val: np.ndarray,
-    n_features: int = 6,
+    n_features: int = 10,
     epochs: int = 50,
     batch_size: int = 64,
     lr: float = 1e-3,
     device: str = "cpu",
     use_amp: bool = False,
     use_compile: bool = False,
+    sample_weights: Optional[np.ndarray] = None,
 ) -> LSTMAlphaModel:
-    """Train the LSTM model."""
+    """Train the LSTM model with optional recency-weighted loss."""
     # Use GPU if available
     if device == "auto":
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -440,12 +460,17 @@ def train_model(
             logger.warning("torch.compile failed, using eager mode: %s", e)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-    criterion = nn.MSELoss()
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode="min", factor=0.5, patience=5
     )
 
-    train_ds = TensorDataset(torch.from_numpy(X_train), torch.from_numpy(y_train))
+    if sample_weights is not None:
+        w_train = torch.from_numpy(sample_weights).float()
+        train_ds = TensorDataset(torch.from_numpy(X_train), torch.from_numpy(y_train), w_train)
+    else:
+        # Use uniform weights
+        w_train = torch.ones(len(X_train), dtype=torch.float32)
+        train_ds = TensorDataset(torch.from_numpy(X_train), torch.from_numpy(y_train), w_train)
     val_ds = TensorDataset(torch.from_numpy(X_val), torch.from_numpy(y_val))
     train_dl = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
     val_dl = DataLoader(val_ds, batch_size=batch_size)
@@ -467,11 +492,13 @@ def train_model(
         # Train
         model.train()
         train_loss = 0.0
-        for xb, yb in train_dl:
-            xb, yb = xb.to(device), yb.to(device)
+        for xb, yb, wb in train_dl:
+            xb, yb, wb = xb.to(device), yb.to(device), wb.to(device)
             with torch.amp.autocast(device_type=device, enabled=use_amp):
                 pred = model(xb)
-                loss = criterion(pred, yb)
+                # Weighted MSE loss
+                per_sample_loss = (pred - yb) ** 2
+                loss = (per_sample_loss * wb.unsqueeze(1)).mean()
             optimizer.zero_grad()
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
@@ -482,14 +509,15 @@ def train_model(
         train_loss /= len(train_ds)
 
         # Validate
-        model.eval()
+        model.train(False)
         val_loss = 0.0
+        criterion_val = nn.MSELoss()
         with torch.no_grad():
             for xb, yb in val_dl:
                 xb, yb = xb.to(device), yb.to(device)
                 with torch.amp.autocast(device_type=device, enabled=use_amp):
                     pred = model(xb)
-                    val_loss += criterion(pred, yb).item() * len(xb)
+                    val_loss += criterion_val(pred, yb).item() * len(xb)
         val_loss /= len(val_ds)
 
         scheduler.step(val_loss)
@@ -650,6 +678,14 @@ def main():
     parser.add_argument("--device", default="auto", help="Device: cpu, cuda, auto")
     parser.add_argument("--val-split", type=float, default=0.2, help="Validation split ratio")
     parser.add_argument(
+        "--walk-forward", action="store_true",
+        help="Use walk-forward validation: train 0-60%%, val 60-80%%, test 80-100%%",
+    )
+    parser.add_argument(
+        "--recency-half-life", type=float, default=0.0,
+        help="Recency weighting half-life in days (0 = uniform weighting). E.g., 35 = recent data weighted 2x vs 35-day-old data",
+    )
+    parser.add_argument(
         "--synthetic", action="store_true",
         help="Use synthetic GBM data instead of fetching from exchange (no API needed)",
     )
@@ -710,11 +746,33 @@ def main():
     y = np.concatenate(all_y, axis=0)
 
     # Chronological split (no shuffle for time-series)
-    split_idx = int(len(X) * (1 - args.val_split))
-    X_train, X_val = X[:split_idx], X[split_idx:]
-    y_train, y_val = y[:split_idx], y[split_idx:]
+    if args.walk_forward:
+        # Walk-forward: train 0-60%, val 60-80%, test 80-100%
+        split1 = int(len(X) * 0.6)
+        split2 = int(len(X) * 0.8)
+        X_train, X_val, X_test = X[:split1], X[split1:split2], X[split2:]
+        y_train, y_val, y_test = y[:split1], y[split1:split2], y[split2:]
+        logger.info("Walk-forward split: Train=%d, Val=%d, Test=%d", len(X_train), len(X_val), len(X_test))
+    else:
+        split_idx = int(len(X) * (1 - args.val_split))
+        X_train, X_val = X[:split_idx], X[split_idx:]
+        y_train, y_val = y[:split_idx], y[split_idx:]
 
     logger.info("Train: %d samples, Val: %d samples", len(X_train), len(X_val))
+
+    # Recency weighting: exponential decay so recent samples matter more
+    sample_weights = None
+    if args.recency_half_life > 0:
+        decay_lambda = np.log(2) / (args.recency_half_life * 1440)  # half-life in minutes (candle units)
+        # Weight increases from oldest (index 0) to newest (index N-1)
+        ages = np.arange(len(X_train), 0, -1, dtype=np.float64)  # oldest=N, newest=1
+        sample_weights = np.exp(-decay_lambda * ages).astype(np.float32)
+        # Normalize so mean weight = 1.0
+        sample_weights /= sample_weights.mean()
+        logger.info(
+            "Recency weighting: half-life=%.0f days, weight range=[%.3f, %.3f]",
+            args.recency_half_life, sample_weights.min(), sample_weights.max(),
+        )
 
     # Train
     model = train_model(
@@ -726,6 +784,7 @@ def main():
         device=args.device,
         use_amp=args.amp,
         use_compile=getattr(args, "compile", False),
+        sample_weights=sample_weights,
     )
 
     # Save PyTorch checkpoint
