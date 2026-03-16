@@ -76,25 +76,23 @@ Test modules cover: Pydantic models, feature extraction (RSI/EMA/ATR/momentum/vo
 
 ```
                          ┌──────────────────────────────────────────────────┐
-                         │              Multi-Scale Feature Engine          │
+                         │              Feature Engine (10 features)        │
                          │                                                  │
   [WSConnector/SimFeed]  │  1m candles ──> RSI, EMA, ATR, Momentum, Vol    │
-        │                │  resampled 15m ──> EMA trend, Momentum (15m)    │
-   push_candle           │  resampled 1h  ──> EMA trend, Momentum (1h)    │
         │                │                                                  │
-        ▼                │  + Web3 native:                                  │
-   [LiveBuffer]          │    Funding Rate (perp sentiment)                 │
-        │                │    Taker Buy/Sell Ratio (aggressor flow)         │
-  event.set()            │    Order Book Imbalance (microstructure)         │
-        │                └──────────────┬───────────────────────────────────┘
-        ▼                               │
-  [StrategyMonitor]                     ▼
-        │                ┌──────────────────────────────────┐
-        │                │  LSTM Classification Head         │
-        │                │  Input:  (batch, 60, N_features)  │
-        │                │  Output: P(Long), P(Neutral),     │
-        │                │          P(Short)                  │
-        │                │  Alpha = P(Long) - P(Short)       │
+   push_candle           │  + Web3 native:                                  │
+        │                │    Funding Rate (perp sentiment)                 │
+        ▼                │    Taker Buy/Sell Ratio (aggressor flow)         │
+   [LiveBuffer]          │    Order Book Imbalance (microstructure)         │
+        │                │    Volume Ratio                                  │
+  event.set()            └──────────────┬───────────────────────────────────┘
+        │                               │
+        ▼                               ▼
+  [StrategyMonitor]      ┌──────────────────────────────────┐
+        │                │  LSTM Regression Head              │
+        │                │  Input:  (batch, 60, 10)           │
+        │                │  Output: Tanh → alpha ∈ [-1, 1]    │
+        │                │  (planned: 3-class classification) │
         │                └──────────────┬───────────────────┘
         │                               │
         ├───────────────────────────────┘
@@ -111,18 +109,17 @@ Test modules cover: Pydantic models, feature extraction (RSI/EMA/ATR/momentum/vo
 
 **Core design principles:**
 
-1. **Multi-scale inputs to combat noise.** Raw 1-minute candles are dominated by microstructure noise. The feature engine resamples candles into 15-minute and 1-hour bars, extracting trend-level EMA crossovers and momentum from each timeframe. This gives the LSTM a view of both short-term dynamics and medium-term regime, without requiring separate models per frequency.
+1. **Web3-native features as first-class inputs.** Unlike equities, crypto perpetual futures expose unique sentiment signals — funding rates reflect leverage imbalance between longs and shorts, and taker buy/sell ratios reveal real-time aggressor flow. These features, streamed directly from Binance public endpoints, give the model information that pure price-derived indicators cannot capture.
 
-2. **Web3-native features as first-class inputs.** Unlike equities, crypto perpetual futures expose unique sentiment signals — funding rates reflect leverage imbalance between longs and shorts, and taker buy/sell ratios reveal real-time aggressor flow. These features, streamed directly from Binance public endpoints, give the model information that pure price-derived indicators cannot capture.
+2. **Event-driven, not polling.** The data feed pushes candles into a `LiveBuffer`. The `StrategyMonitor` blocks on `asyncio.Event` until a new closed candle arrives — zero CPU waste between events.
 
-3. **Event-driven, not polling.** The data feed pushes candles into a `LiveBuffer`. The `StrategyMonitor` blocks on `asyncio.Event` until a new closed candle arrives — zero CPU waste between events.
+3. **Multi-scale inputs (planned).** A future upgrade will resample 1m candles into 15-minute and 1-hour bars, extracting trend-level EMA crossovers and momentum from each timeframe to combat microstructure noise.
 
 ### Feature Summary
 
 | Category | Features | Timeframe | Source |
 |----------|----------|-----------|--------|
 | Price-derived | RSI(14), EMA(12/26), ATR(14), Momentum(10), Volatility(20) | 1m | Candles |
-| Multi-scale trend | EMA crossover, Momentum | 15m, 1h | Resampled candles |
 | Web3 sentiment | Funding rate | Real-time | Binance Futures WS |
 | Order flow | Taker buy/sell ratio | 5m | Binance REST |
 | Microstructure | Order book imbalance, Volume ratio | 100ms / per candle | Binance Depth WS |
@@ -146,12 +143,12 @@ trading-competition/
 │   ├── sim_feed.py             # Synthetic GBM candle generator (paper mode)
 │   └── historical/             # Cached CSV from ccxt (auto-created by training script)
 ├── features/
-│   └── extractor.py            # OHLCV → multi-scale features (1m/15m/1h + Web3 sentiment + microstructure)
+│   └── extractor.py            # OHLCV → 10 features (RSI, EMA, ATR, momentum, vol, OB imbalance, vol ratio, funding, taker ratio)
 ├── models/
-│   ├── lstm_model.py           # PyTorch LSTM (2-layer, 128 hidden) with 3-class softmax head
+│   ├── lstm_model.py           # PyTorch LSTM architecture (2-layer, 128 hidden, tanh regression head)
 │   ├── model_wrapper.py        # Loads .onnx or .pt model for inference
 │   ├── inference.py            # AlphaEngine: rule-based / lstm / ensemble scoring
-│   └── train.py                # Offline training (walk-forward, recency weighting, classification labels)
+│   └── train.py                # Offline training (walk-forward validation, recency weighting)
 ├── strategy/
 │   ├── logic.py                # Per-symbol state machine + Half-Kelly sizing + alpha-driven order routing
 │   └── monitor.py              # Central event loop / orchestrator
@@ -215,51 +212,48 @@ python -m models.train --synthetic --device cuda --amp --compile --wandb --wandb
 
 **Recommended: fetch 90 days of 1-minute history.** 90 days provides ~129,600 candles per symbol — enough to cover multiple market regimes (trending, ranging, high-vol events) while staying within Binance's free API limits. Shorter windows risk overfitting to a single regime; longer windows dilute recent patterns.
 
-**Time-series split (70 / 15 / 15):**
+**Time-series split (default 80/20, walk-forward 60/20/20):**
 
 ```
-Day 1                    Day 63           Day 76.5         Day 90
- │─────── Train (70%) ──────│── Val (15%) ──│── Test (15%) ──│
- │        ~90,720 candles   │  ~19,440      │  ~19,440       │
+Default mode:
+Day 1                                      Day 72           Day 90
+ │────────────── Train (80%) ──────────────│── Val (20%) ────│
+ │              ~103,680 candles           │  ~25,920        │
+
+Walk-forward mode (--walk-forward):
+Day 1                    Day 54           Day 72           Day 90
+ │─────── Train (60%) ──────│── Val (20%) ──│── Test (20%) ──│
 ```
 
-- **Train (70%):** Model learns feature → signal mappings. Recency weighting (optional, `--recency-half-life 35`) down-weights older samples so the model prioritizes recent market behavior.
-- **Validation (15%):** Hyperparameter tuning and early stopping. ReduceLROnPlateau monitors val loss; training stops if no improvement for 10 epochs.
-- **Test (15%):** Final out-of-sample evaluation. Never touched during training. Walk-forward mode (`--walk-forward`) reports test metrics separately.
+- **Train:** Model learns feature → signal mappings. Recency weighting (optional, `--recency-half-life 35`) down-weights older samples so the model prioritizes recent market behavior.
+- **Validation:** Hyperparameter tuning and early stopping. ReduceLROnPlateau monitors val loss; training stops if no improvement for 10 epochs.
+- **Test (walk-forward only):** Final out-of-sample evaluation. Never touched during training.
 
-Chronological ordering is strictly enforced — no shuffling, no future leakage.
+Each symbol is split chronologically before concatenation — no cross-symbol temporal leakage. No shuffling, no future leakage.
 
-### Classification Output
+### Model Output
 
-The LSTM outputs a 3-class probability distribution over the next 15-minute price movement:
-
-| Class | Definition | Label Logic |
-|-------|-----------|-------------|
-| **Long** | 15-min forward return > +threshold | Price likely to rise |
-| **Neutral** | Forward return within ±threshold | No clear directional edge |
-| **Short** | 15-min forward return < -threshold | Price likely to fall |
-
-**Alpha score** is computed as the probability differential:
+The LSTM outputs a scalar alpha score via tanh activation:
 
 ```
-alpha = P(Long) - P(Short)    ∈ [-1, 1]
+alpha = tanh(linear(LSTM_hidden)) ∈ [-1, 1]
 ```
 
-- `alpha = +0.8` → model is 80% net-confident in upward movement → strong buy signal
-- `alpha = +0.1` → near-neutral → no action
-- `alpha = -0.5` → model expects downward movement → exit existing position
+- `alpha = +0.8` → strong bullish signal → buy (market order if > 0.85)
+- `alpha = +0.1` → weak signal → no action (below entry threshold 0.6)
+- `alpha = -0.3` → bearish signal → exit existing position (below exit threshold -0.2)
 
-This classification framing has two advantages over regression:
-1. **Naturally handles the "do nothing" case.** A high P(Neutral) suppresses trading in choppy markets, reducing churn.
-2. **Probability calibration is actionable.** The confidence gap `P(Long) - P(Short)` maps directly to position sizing via Half-Kelly.
+Labels are constructed from forward returns: `y = tanh(forward_return × 100)`, scaled to [-1, 1]. Trained with MSE loss (optionally recency-weighted).
+
+**Planned upgrade:** Convert to 3-class classification (Long/Neutral/Short) with cross-entropy loss, where alpha = P(Long) - P(Short). This would naturally handle the "do nothing" case via P(Neutral) and provide better probability calibration for position sizing.
 
 ### Training Pipeline
 
 1. Fetches 90 days of 1-minute candles from Binance via ccxt (with CSV caching), or generates synthetic GBM candles with `--synthetic`
-2. Resamples candles into 15-minute and 1-hour bars for multi-scale feature extraction
-3. Vectorized feature computation — all timeframes and indicators in one pass (~0.5s for 10k candles)
-4. Labels each sample by forward 15-minute return → classified into Long / Neutral / Short
-5. Trains with cross-entropy loss (optionally recency-weighted), chronological 70/15/15 split
+2. Vectorized feature computation — all 10 features in one pass (~0.5s for 10k candles)
+3. Labels = forward return (configurable via `--forward-window`), scaled to [-1, 1] via tanh
+4. Trains with MSE loss (optionally recency-weighted), chronological split (80/20 or 60/20/20 walk-forward)
+5. Per-symbol chronological split before concatenation — no cross-symbol temporal leakage
 6. Walk-forward validation available for robust out-of-sample testing
 7. Saves `artifacts/model.pt` (PyTorch) and `artifacts/model.onnx` (ONNX)
 8. Logs to wandb if `--wandb` is set (entity: `Base-Work-Space`, project: `trading-lstm`)
@@ -274,26 +268,26 @@ alpha:
 
 ## Design Decisions
 
-### Why multi-scale features instead of raw 1m input?
+### Why multi-scale features? (planned)
 
-1-minute candles in crypto are dominated by microstructure noise — bid-ask bounce, random fills, latency jitter. Feeding raw 1m bars into an LSTM forces the model to learn noise-filtering implicitly, wasting capacity. Instead, we resample into 15-minute and 1-hour bars and extract trend indicators (EMA crossover, momentum) at each scale:
+1-minute candles in crypto are dominated by microstructure noise — bid-ask bounce, random fills, latency jitter. A planned upgrade will resample candles into 15-minute and 1-hour bars and extract trend indicators (EMA crossover, momentum) at each scale:
 
 - **1m features** capture short-term mean-reversion and volatility spikes
-- **15m features** capture intraday trend direction and momentum
-- **1h features** capture session-level regime (trending vs. ranging)
+- **15m features** would capture intraday trend direction and momentum
+- **1h features** would capture session-level regime (trending vs. ranging)
 
-The LSTM receives all scales concatenated, letting it learn cross-frequency interactions (e.g., "1m RSI oversold + 1h trend bullish" → high-confidence long).
+The LSTM would receive all scales concatenated, letting it learn cross-frequency interactions (e.g., "1m RSI oversold + 1h trend bullish" → high-confidence long).
 
-### Why classification (Long/Neutral/Short) instead of regression?
+### Why regression output (with planned classification upgrade)?
 
-Regression targets (forward return scaled by tanh) conflate two problems: direction and magnitude. A +0.02% return and a +2.0% return both map to positive values, but require very different actions.
+The current model uses tanh regression, predicting forward returns scaled to [-1, 1]. This is simple and works well with MSE loss.
 
-Classification separates these concerns:
-- **Direction** is captured by the class label (Long vs. Short)
-- **Confidence** is captured by the probability gap `P(Long) - P(Short)`
-- **Inaction** is explicitly modeled by P(Neutral) — the model can express "I don't know" instead of being forced to predict a return
+A planned upgrade will convert to 3-class classification (Long/Neutral/Short):
+- **Direction** captured by class label (Long vs. Short)
+- **Confidence** captured by probability gap `P(Long) - P(Short)`
+- **Inaction** explicitly modeled by P(Neutral)
 
-This also avoids the tanh saturation problem where extreme returns get compressed, and aligns the loss function (cross-entropy) with the actual decision boundary the strategy cares about.
+This would avoid tanh saturation on extreme returns and align the loss function (cross-entropy) with the strategy's actual decision boundary.
 
 ### Why deep integration of Web3-native data?
 
