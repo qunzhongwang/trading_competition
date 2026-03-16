@@ -76,6 +76,14 @@ class OrderManager:
         for order_id in to_remove:
             self._active_orders.pop(order_id, None)
 
+    async def cancel_all(self) -> None:
+        """Cancel all active orders (used during shutdown)."""
+        if not self._active_orders:
+            return
+        logger.info("Cancelling %d active orders...", len(self._active_orders))
+        for order_id in list(self._active_orders.keys()):
+            await self.cancel(order_id)
+
     def register_fill_callback(self, cb: Callable[[Order], None]) -> None:
         """Register a callback to be called on order fills."""
         self._fill_callbacks.append(cb)

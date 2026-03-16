@@ -169,6 +169,7 @@ async def main(config: dict) -> None:
 
         # Cleanup
         logger.info("Shutting down...")
+        await order_manager.cancel_all()
         await monitor.stop()
         await feed.stop()
         await supp_feed.stop()
