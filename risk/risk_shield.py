@@ -35,8 +35,12 @@ class RiskShield:
     def circuit_breaker_active(self) -> bool:
         return self._circuit_breaker_active
 
-    def validate(self, order: Order, tracker: PortfolioTracker) -> Optional[Order]:
-        """Pre-trade validation. Returns order (possibly adjusted) or None if rejected."""
+    def validate(self, order: Order, tracker: PortfolioTracker, is_stop: bool = False) -> Optional[Order]:
+        """Pre-trade validation. Returns order (possibly adjusted) or None if rejected.
+
+        Args:
+            is_stop: If True, skip rate limit — stop-loss orders must never be dropped.
+        """
         snapshot = tracker.snapshot()
 
         # 1. Circuit breaker
@@ -59,15 +63,16 @@ class RiskShield:
                 logger.warning("REJECTED: no position to sell for %s", order.symbol)
                 return None
 
-        # 3. Rate limit
-        now = time.time()
-        # Remove timestamps older than 60s
-        while self._order_timestamps and self._order_timestamps[0] < now - 60:
-            self._order_timestamps.popleft()
-        if len(self._order_timestamps) >= self._max_orders_per_minute:
-            logger.warning("REJECTED: rate limit exceeded (%d/min)", self._max_orders_per_minute)
-            return None
-        self._order_timestamps.append(now)
+        # 3. Rate limit (skip for stop-loss orders — stops must never be dropped)
+        if not is_stop:
+            now = time.time()
+            # Remove timestamps older than 60s
+            while self._order_timestamps and self._order_timestamps[0] < now - 60:
+                self._order_timestamps.popleft()
+            if len(self._order_timestamps) >= self._max_orders_per_minute:
+                logger.warning("REJECTED: rate limit exceeded (%d/min)", self._max_orders_per_minute)
+                return None
+            self._order_timestamps.append(now)
 
         # 4. Exposure checks (only for buys)
         if order.side == Side.BUY:
