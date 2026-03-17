@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 from features.extractor import FeatureExtractor
-from models.train import build_dataset, generate_synthetic_ohlcv, raw_to_ohlcv
+from models.train import build_dataset, generate_synthetic_ohlcv, raw_to_ohlcv, resample_candles
 
 
 @pytest.fixture
@@ -45,10 +45,12 @@ class TestBuildDataset:
         with pytest.raises(ValueError, match="Not enough candles"):
             build_dataset(candles, extractor, seq_len=30, forward_window=5)
 
-    def test_labels_in_valid_range(self, extractor):
+    def test_labels_are_z_scored(self, extractor):
         candles = generate_synthetic_ohlcv("BTC/USDT", n_candles=200, seed=42)
         X, y = build_dataset(candles, extractor)
-        assert np.all(y >= -1.0) and np.all(y <= 1.0)
+        # Labels are z-score normalized: mean≈0, std≈1
+        assert abs(y.mean()) < 0.1
+        assert abs(y.std() - 1.0) < 0.2
         assert X.dtype == np.float32
         assert y.dtype == np.float32
 
@@ -89,3 +91,40 @@ class TestGenerateSyntheticOhlcv:
         candles = generate_synthetic_ohlcv("BTC/USDT", n_candles=100, seed=1)
         for i in range(1, len(candles)):
             assert candles[i].timestamp > candles[i - 1].timestamp
+
+
+class TestResampleCandles:
+    def test_5min_resampling(self):
+        candles = generate_synthetic_ohlcv("BTC/USDT", n_candles=100, seed=42)
+        resampled = resample_candles(candles, 5)
+        assert len(resampled) == 20  # 100 / 5
+
+    def test_ohlcv_aggregation(self):
+        candles = generate_synthetic_ohlcv("BTC/USDT", n_candles=10, seed=42)
+        resampled = resample_candles(candles, 5)
+        assert len(resampled) == 2
+        first_bar = resampled[0]
+        first_5 = candles[:5]
+        assert first_bar.open == first_5[0].open
+        assert first_bar.close == first_5[-1].close
+        assert first_bar.high == max(c.high for c in first_5)
+        assert first_bar.low == min(c.low for c in first_5)
+        assert abs(first_bar.volume - sum(c.volume for c in first_5)) < 1e-4
+
+    def test_noop_for_1min(self):
+        candles = generate_synthetic_ohlcv("BTC/USDT", n_candles=50, seed=42)
+        result = resample_candles(candles, 1)
+        assert len(result) == len(candles)
+
+    def test_incomplete_bars_discarded(self):
+        candles = generate_synthetic_ohlcv("BTC/USDT", n_candles=13, seed=42)
+        resampled = resample_candles(candles, 5)
+        assert len(resampled) == 2  # 13 / 5 = 2 complete bars, 3 discarded
+
+    def test_empty_input(self):
+        assert resample_candles([], 5) == []
+
+    def test_symbol_preserved(self):
+        candles = generate_synthetic_ohlcv("ETH/USDT", n_candles=10, seed=42)
+        resampled = resample_candles(candles, 5)
+        assert all(c.symbol == "ETH/USDT" for c in resampled)

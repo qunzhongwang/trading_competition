@@ -79,7 +79,7 @@ roostoo:
   api_secret: ""    # env var override: ROOSTOO_API_SECRET
 
 data:
-  buffer_size: 500          # sliding window length (candles)
+  buffer_size: 1500         # sliding window length (candles) — need 240×5=1200 raw 1-min candles min
   candle_interval: "1m"     # 1-minute candles
   tick_buffer_size: 5000    # raw tick buffer
 
@@ -96,7 +96,8 @@ alpha:
   entry_threshold: 0.6
   exit_threshold: -0.2
   model_path: "artifacts/model.onnx"
-  seq_len: 60               # LSTM lookback window
+  seq_len: 240              # model lookback window (240 × 5min = 20h)
+  resample_minutes: 5       # gate alpha on N-min bar completion
 
 strategy:
   max_positions_per_symbol: 1

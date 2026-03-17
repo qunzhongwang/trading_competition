@@ -71,6 +71,8 @@ def _init_wandb(args: argparse.Namespace, extra_config: Optional[dict] = None) -
         "amp": args.amp,
         "compile": getattr(args, "compile", False),
         "seed": args.seed,
+        "resample_minutes": args.resample_minutes,
+        "loss": "log_weighted_mse",
     }
     if extra_config:
         config.update(extra_config)
@@ -263,6 +265,66 @@ def raw_to_ohlcv(raw_data: List[list], symbol: str) -> List[OHLCV]:
             is_closed=True,
         ))
     return candles
+
+
+def resample_candles(candles: List[OHLCV], minutes: int) -> List[OHLCV]:
+    """Aggregate 1-min candles into N-min candles.
+
+    Groups by floor(timestamp, minutes). Discards incomplete trailing bars.
+    OHLCV aggregation: open=first, high=max, low=min, close=last, volume=sum.
+    """
+    if minutes <= 1:
+        return candles
+    if not candles:
+        return []
+
+    result: List[OHLCV] = []
+    bucket: List[OHLCV] = []
+    symbol = candles[0].symbol
+
+    def _floor_ts(ts: datetime) -> datetime:
+        """Floor timestamp to nearest N-minute boundary."""
+        total_min = ts.hour * 60 + ts.minute
+        floored_min = (total_min // minutes) * minutes
+        return ts.replace(hour=floored_min // 60, minute=floored_min % 60, second=0, microsecond=0)
+
+    current_bucket_ts = _floor_ts(candles[0].timestamp)
+
+    for c in candles:
+        bucket_ts = _floor_ts(c.timestamp)
+        if bucket_ts != current_bucket_ts:
+            # Emit completed bucket
+            if len(bucket) == minutes:
+                result.append(OHLCV(
+                    symbol=symbol,
+                    open=bucket[0].open,
+                    high=max(b.high for b in bucket),
+                    low=min(b.low for b in bucket),
+                    close=bucket[-1].close,
+                    volume=sum(b.volume for b in bucket),
+                    timestamp=bucket[-1].timestamp,
+                    is_closed=True,
+                ))
+            bucket = [c]
+            current_bucket_ts = bucket_ts
+        else:
+            bucket.append(c)
+
+    # Emit last bucket if complete
+    if len(bucket) == minutes:
+        result.append(OHLCV(
+            symbol=symbol,
+            open=bucket[0].open,
+            high=max(b.high for b in bucket),
+            low=min(b.low for b in bucket),
+            close=bucket[-1].close,
+            volume=sum(b.volume for b in bucket),
+            timestamp=bucket[-1].timestamp,
+            is_closed=True,
+        ))
+
+    logger.info("Resampled %d 1-min candles → %d %d-min candles", len(candles), len(result), minutes)
+    return result
 
 
 def load_parquet_ohlcv(parquet_dir: str, symbols: Optional[List[str]] = None) -> dict:
@@ -541,6 +603,7 @@ def train_model(
     sample_weights: Optional[np.ndarray] = None,
     model_type: str = "lstm",
     model_kwargs: Optional[dict] = None,
+    early_stop_patience: int = 5,
 ) -> nn.Module:
     """Train LSTM or Transformer model with optional recency-weighted loss."""
     # Use GPU if available
@@ -559,7 +622,7 @@ def train_model(
         except Exception as e:
             logger.warning("torch.compile failed, using eager mode: %s", e)
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode="min", factor=0.5, patience=5
     )
@@ -582,6 +645,7 @@ def train_model(
     best_val_loss = float("inf")
     best_state = None
     best_epoch = 0
+    patience_counter = 0
     epoch_times: list[float] = []
 
     # Pre-training validation baseline
@@ -612,8 +676,10 @@ def train_model(
             xb, yb, wb = xb.to(device), yb.to(device), wb.to(device)
             with torch.amp.autocast(device_type=device, enabled=use_amp):
                 pred = model(xb)
-                # Weighted MSE loss
-                per_sample_loss = (pred - yb) ** 2
+                # Log-weighted MSE: error² × log(1 + error²)
+                # Super-quadratic: gentle near zero, escalates for large errors
+                error_sq = (pred - yb) ** 2
+                per_sample_loss = error_sq * torch.log1p(error_sq)
                 loss = (per_sample_loss * wb.unsqueeze(1)).mean()
             optimizer.zero_grad()
             scaler.scale(loss).backward()
@@ -679,6 +745,13 @@ def train_model(
             best_val_loss = val_loss
             best_epoch = epoch + 1
             best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+            patience_counter = 0
+        else:
+            patience_counter += 1
+            if patience_counter >= early_stop_patience:
+                logger.info("Early stopping at epoch %d (no improvement for %d epochs)",
+                            epoch + 1, early_stop_patience)
+                break
 
     if best_state:
         model.load_state_dict(best_state)
@@ -834,6 +907,7 @@ def main():
     parser.add_argument("--d-ff", type=int, default=None, help="Transformer feedforward dimension")
     parser.add_argument("--amp", action="store_true", help="Enable automatic mixed precision (GPU recommended)")
     parser.add_argument("--compile", action="store_true", help="Enable torch.compile (PyTorch 2.0+, GPU recommended)")
+    parser.add_argument("--resample-minutes", type=int, default=1, help="Resample candles to N-minute bars (1=no-op)")
     parser.add_argument("--save-dataset", default="", help="Pre-build dataset and save to .npz (skip training)")
     parser.add_argument("--load-dataset", default="", help="Load pre-built dataset from .npz (skip data parsing)")
     # wandb
@@ -874,6 +948,8 @@ def main():
             symbol_filter = args.symbols if args.symbols != ["BTC/USDT"] else None
             symbol_candles = load_parquet_ohlcv(args.parquet_dir, symbols=symbol_filter)
             for symbol, candles in symbol_candles.items():
+                if args.resample_minutes > 1:
+                    candles = resample_candles(candles, args.resample_minutes)
                 logger.info("=== Processing %s (%d candles) ===", symbol, len(candles))
                 X, y = build_dataset(candles, extractor, args.seq_len, args.forward_window)
                 all_X.append(X)
@@ -897,6 +973,8 @@ def main():
                     raw_data = fetch_ohlcv(symbol, args.interval, args.days)
                     candles = raw_to_ohlcv(raw_data, symbol)
 
+                if args.resample_minutes > 1:
+                    candles = resample_candles(candles, args.resample_minutes)
                 logger.info("Got %d candles for %s", len(candles), symbol)
 
                 X, y = build_dataset(candles, extractor, args.seq_len, args.forward_window)
@@ -952,7 +1030,8 @@ def main():
     # Recency weighting: exponential decay so recent samples matter more
     sample_weights = None
     if args.recency_half_life > 0:
-        decay_lambda = np.log(2) / (args.recency_half_life * 1440)  # half-life in minutes (candle units)
+        candles_per_day = 1440 / args.resample_minutes
+        decay_lambda = np.log(2) / (args.recency_half_life * candles_per_day)  # half-life in candle units
         # Weight increases from oldest (index 0) to newest (index N-1)
         ages = np.arange(len(X_train), 0, -1, dtype=np.float64)  # oldest=N, newest=1
         sample_weights = np.exp(-decay_lambda * ages).astype(np.float32)

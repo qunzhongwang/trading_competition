@@ -34,6 +34,7 @@ from models.inference import AlphaEngine
 from models.model_wrapper import ModelWrapper
 from risk.risk_shield import RiskShield
 from risk.tracker import PortfolioTracker
+from data.resampler import CandleResampler
 from strategy.monitor import StrategyMonitor
 
 logger = logging.getLogger(__name__)
@@ -189,7 +190,13 @@ async def main(config: dict) -> None:
     # 9. Order manager
     order_manager = OrderManager(executor, tracker)
 
-    # 10. Strategy monitor (orchestrator)
+    # 10. Candle resampler (optional, for N-min alpha gating)
+    resample_minutes = alpha_cfg.get("resample_minutes", 1)
+    resampler = CandleResampler(resample_minutes) if resample_minutes > 1 else None
+    if resampler:
+        logger.info("Candle resampler: %d-min bars for alpha scoring", resample_minutes)
+
+    # 11. Strategy monitor (orchestrator)
     monitor = StrategyMonitor(
         config=config,
         buffer=buffer,
@@ -198,6 +205,7 @@ async def main(config: dict) -> None:
         risk_shield=risk_shield,
         tracker=tracker,
         order_manager=order_manager,
+        resampler=resampler,
     )
 
     # ── Graceful Shutdown ──
@@ -213,7 +221,7 @@ async def main(config: dict) -> None:
     # ── Run ──
     logger.info("Starting trading loop...")
 
-    # 11. Supplementary Binance data feed (order book, funding, taker ratio)
+    # 12. Supplementary Binance data feed (order book, funding, taker ratio)
     supp_feed = BinanceSupplementaryFeed(config.get("symbols", []), buffer)
 
     # NAV snapshot interval for risk metrics (every 60 iterations ~= 1 hour at 1m candles)

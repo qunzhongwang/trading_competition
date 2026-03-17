@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 from core.models import OHLCV, Order, OrderStatus, StrategyState
 from data.buffer import LiveBuffer
+from data.resampler import CandleResampler
 from execution.order_manager import OrderManager
 from features.extractor import FeatureExtractor
 from models.inference import AlphaEngine
@@ -32,6 +33,7 @@ class StrategyMonitor:
         risk_shield: RiskShield,
         tracker: PortfolioTracker,
         order_manager: OrderManager,
+        resampler: Optional[CandleResampler] = None,
     ):
         self._config = config
         self._buffer = buffer
@@ -41,6 +43,7 @@ class StrategyMonitor:
         self._tracker = tracker
         self._order_manager = order_manager
         self._running = False
+        self._resampler = resampler
 
         # Per-symbol strategy state machines
         symbols = config.get("symbols", [])
@@ -73,13 +76,21 @@ class StrategyMonitor:
         logger.info("StrategyMonitor stopped")
 
     async def _process_iteration(self, iteration: int) -> None:
-        """Process one iteration: for each symbol, run the full pipeline."""
+        """Process one iteration: for each symbol, run the full pipeline.
+
+        Price updates and stop checks run every 1-min candle.
+        Alpha scoring and trade decisions only run when the resampler emits
+        a completed N-min bar (or every candle if no resampler).
+        """
         # Check pending limit orders for fills
         await self._order_manager.check_pending()
 
         snapshot = self._tracker.snapshot()
         latest_candles: Dict[str, OHLCV] = {}
         atr_values: Dict[str, float] = {}
+
+        # Track which symbols have a completed resampled bar this iteration
+        alpha_ready: Set[str] = set()
 
         for symbol, strategy in self._strategies.items():
             candles = await self._buffer.get_candles(symbol)
@@ -88,8 +99,16 @@ class StrategyMonitor:
 
             latest_candles[symbol] = candles[-1]
 
-            # Update position prices
+            # Update position prices (every 1-min candle)
             self._tracker.update_prices(symbol, candles[-1].close)
+
+            # Gate alpha on resampled bar completion
+            if self._resampler is not None:
+                resampled = self._resampler.push(candles[-1])
+                if resampled is not None:
+                    alpha_ready.add(symbol)
+            else:
+                alpha_ready.add(symbol)
 
             # Check warmup
             if len(candles) < self._warmup_candles:
@@ -100,12 +119,15 @@ class StrategyMonitor:
                     )
                 continue
 
-            # ── Feature Extraction ──
+            # ── Feature Extraction (always, for ATR stops) ──
             supplementary = await self._buffer.get_supplementary(symbol)
             features = self._extractor.extract(candles, supplementary=supplementary)
             atr_values[symbol] = features.atr
 
-            # ── Alpha Scoring ──
+            # ── Alpha Scoring (only on completed resampled bars) ──
+            if symbol not in alpha_ready:
+                continue
+
             signal = self._alpha_engine.score(candles, supplementary=supplementary)
 
             # ── Strategy Decision ──

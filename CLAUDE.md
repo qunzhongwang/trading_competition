@@ -107,7 +107,7 @@ Uses Half-Kelly criterion scaled by alpha signal conviction:
 
 GPU flags: `--amp` (mixed precision via `torch.amp`), `--compile` (`torch.compile`). Both degrade gracefully on CPU.
 
-Training flags: `--walk-forward` (train 0-60%, val 60-80%, test 80-100%), `--recency-half-life N` (exponential decay weighting, half-life in days).
+Training flags: `--walk-forward` (train 0-60%, val 60-80%, test 80-100%), `--recency-half-life N` (exponential decay weighting, half-life in days), `--resample-minutes N` (aggregate 1-min candles to N-min bars). Loss function: log-weighted MSE `error² × log(1 + error²)` — super-quadratic penalty on large errors.
 
 Dataset building uses vectorized feature extraction (computes all 10 features once, then slices windows). 10k candles builds in ~0.5s vs ~13 min with the naive approach.
 
