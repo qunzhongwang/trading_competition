@@ -28,6 +28,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
+from tqdm import tqdm
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -495,8 +496,16 @@ def build_dataset(
         fwd_return = (fut - cur) / cur if cur > 0 else 0.0
         y[idx, 0] = np.tanh(fwd_return * 100.0)
 
+    # Z-score normalize labels so MSE loss has meaningful gradients
+    y_mean = y.mean()
+    y_std = y.std()
+    if y_std < 1e-8:
+        y_std = 1.0
+    y = (y - y_mean) / y_std
+
     logger.info("Window slicing: %.1fs", time.time() - t0)
-    logger.info("Dataset shape: X=%s, y=%s", X.shape, y.shape)
+    logger.info("Dataset shape: X=%s, y=%s | y_mean=%.4f, y_std=%.4f",
+                X.shape, y.shape, y_mean, y_std)
     return X, y
 
 
@@ -575,6 +584,19 @@ def train_model(
     best_epoch = 0
     epoch_times: list[float] = []
 
+    # Pre-training validation baseline
+    model.eval()
+    pre_val_loss = 0.0
+    criterion_pre = nn.MSELoss()
+    with torch.no_grad():
+        for xb, yb in val_dl:
+            xb, yb = xb.to(device), yb.to(device)
+            with torch.amp.autocast(device_type=device, enabled=use_amp):
+                pred = model(xb)
+                pre_val_loss += criterion_pre(pred, yb).item() * len(xb)
+    pre_val_loss /= len(val_ds)
+    logger.info("Pre-train val_loss=%.4f (baseline, naive≈1.0)", pre_val_loss)
+
     t_start = time.time()
 
     for epoch in range(epochs):
@@ -583,7 +605,10 @@ def train_model(
         # Train
         model.train()
         train_loss = 0.0
-        for xb, yb, wb in train_dl:
+        n_batches = len(train_dl)
+        pbar = tqdm(train_dl, desc=f"Epoch {epoch+1}/{epochs} [train]",
+                    leave=False, dynamic_ncols=True, mininterval=30)
+        for xb, yb, wb in pbar:
             xb, yb, wb = xb.to(device), yb.to(device), wb.to(device)
             with torch.amp.autocast(device_type=device, enabled=use_amp):
                 pred = model(xb)
@@ -597,19 +622,36 @@ def train_model(
             scaler.step(optimizer)
             scaler.update()
             train_loss += loss.item() * len(xb)
+            pbar.set_postfix(loss=f"{loss.item():.4f}")
+        pbar.close()
         train_loss /= len(train_ds)
 
         # Validate
         model.eval()
         val_loss = 0.0
         criterion_val = nn.MSELoss()
+        val_example_logged = False
         with torch.no_grad():
             for xb, yb in val_dl:
                 xb, yb = xb.to(device), yb.to(device)
                 with torch.amp.autocast(device_type=device, enabled=use_amp):
                     pred = model(xb)
                     val_loss += criterion_val(pred, yb).item() * len(xb)
+                # Log one example per epoch
+                if not val_example_logged:
+                    ex_pred = pred[0].item()
+                    ex_true = yb[0].item()
+                    ex_input = xb[0, -1, :6].cpu().numpy()
+                    feat_names = ["rsi", "ema_f", "ema_s", "atr", "mom", "vol"]
+                    feat_str = " ".join(f"{n}={v:+.2f}" for n, v in zip(feat_names, ex_input))
+                    val_example_logged = True
         val_loss /= len(val_ds)
+
+        # Log validation example
+        logger.info(
+            "  sample: pred=%.4f true=%.4f err=%.4f | %s",
+            ex_pred, ex_true, abs(ex_pred - ex_true), feat_str,
+        )
 
         scheduler.step(val_loss)
 
@@ -621,7 +663,7 @@ def train_model(
         # Terminal output
         marker = " *" if improved else ""
         logger.info(
-            "Epoch %d/%d  train=%.6f  val=%.6f  lr=%.2e  %.1fs%s",
+            "Epoch %d/%d  train=%.4f  val=%.4f  lr=%.2e  %.1fs%s",
             epoch + 1, epochs, train_loss, val_loss, cur_lr, epoch_dt, marker,
         )
 
