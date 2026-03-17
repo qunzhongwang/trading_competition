@@ -74,6 +74,9 @@ class StrategyMonitor:
 
     async def _process_iteration(self, iteration: int) -> None:
         """Process one iteration: for each symbol, run the full pipeline."""
+        # Check pending limit orders for fills
+        await self._order_manager.check_pending()
+
         snapshot = self._tracker.snapshot()
         latest_candles: Dict[str, OHLCV] = {}
         atr_values: Dict[str, float] = {}
@@ -122,7 +125,7 @@ class StrategyMonitor:
         # Trailing stops and ATR stops
         stop_orders = self._risk_shield.check_stops(self._tracker, latest_candles, atr_values)
         for stop_order in stop_orders:
-            validated = self._risk_shield.validate(stop_order, self._tracker)
+            validated = self._risk_shield.validate(stop_order, self._tracker, is_stop=True)
             if validated is not None:
                 await self._order_manager.submit(validated)
                 # Update strategy state

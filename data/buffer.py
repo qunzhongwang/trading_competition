@@ -71,11 +71,12 @@ class LiveBuffer:
 
     async def wait_for_update(self, timeout: float = 5.0) -> bool:
         """Block until a new closed candle arrives. Returns False on timeout."""
-        self._event.clear()
         try:
             await asyncio.wait_for(self._event.wait(), timeout=timeout)
+            self._event.clear()  # clear AFTER waking — avoids losing signals set during processing
             return True
         except asyncio.TimeoutError:
+            self._event.clear()
             return False
 
     async def push_depth(self, symbol: str, bids: list, asks: list) -> None:

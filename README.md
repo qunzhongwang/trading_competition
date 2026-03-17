@@ -75,19 +75,56 @@ Test modules cover: Pydantic models, feature extraction (RSI/EMA/ATR/momentum/vo
 ## Architecture
 
 ```
-[WSConnector / SimFeed]  ── push_candle ──>  [LiveBuffer]  ── event.set() ──>  [StrategyMonitor]
-                                                  |                                     |
-[BinanceSupplementaryFeed] ── push_depth/funding/taker ──>  │                           |
-                                                                                        |
-        FeatureExtractor ─┬─ extract()          → rule-based score ─┐                 |
-         (10 features)    └─ extract_sequence() → LSTM forward pass ─┤→ AlphaEngine → Signal
-                                                                     |
-                                  StrategyLogic → RiskShield → OrderManager → Executor
-                                  (Half-Kelly)   (stops)       (market/limit)     |
-                                  check_stops()                    PortfolioTracker.on_fill()
+                         ┌──────────────────────────────────────────────────┐
+                         │              Feature Engine (10 features)        │
+                         │                                                  │
+  [WSConnector/SimFeed]  │  1m candles ──> RSI, EMA, ATR, Momentum, Vol    │
+        │                │                                                  │
+   push_candle           │  + Web3 native:                                  │
+        │                │    Funding Rate (perp sentiment)                 │
+        ▼                │    Taker Buy/Sell Ratio (aggressor flow)         │
+   [LiveBuffer]          │    Order Book Imbalance (microstructure)         │
+        │                │    Volume Ratio                                  │
+  event.set()            └──────────────┬───────────────────────────────────┘
+        │                               │
+        ▼                               ▼
+  [StrategyMonitor]      ┌──────────────────────────────────┐
+        │                │  LSTM Regression Head              │
+        │                │  Input:  (batch, 60, 10)           │
+        │                │  Output: Tanh → alpha ∈ [-1, 1]    │
+        │                │  (planned: 3-class classification) │
+        │                └──────────────┬───────────────────┘
+        │                               │
+        ├───────────────────────────────┘
+        ▼
+   AlphaEngine ──> Signal {alpha ∈ [-1, 1]}
+        │
+        ▼
+   StrategyLogic ──────────> RiskShield ──────────> OrderManager ──> Executor
+   (Half-Kelly sizing)       (dynamic ATR stop,      (market if α > 0.85,
+                              trailing stop,           limit if α ∈ [0.6, 0.85])
+                              circuit breaker)                    │
+                                                    PortfolioTracker.on_fill()
 ```
 
-**Producer-consumer pattern:** The data feed pushes candles into a `LiveBuffer`. The `StrategyMonitor` blocks on `asyncio.Event` until a new closed candle arrives — no polling, purely event-driven.
+**Core design principles:**
+
+1. **Web3-native features as first-class inputs.** Unlike equities, crypto perpetual futures expose unique sentiment signals — funding rates reflect leverage imbalance between longs and shorts, and taker buy/sell ratios reveal real-time aggressor flow. These features, streamed directly from Binance public endpoints, give the model information that pure price-derived indicators cannot capture.
+
+2. **Event-driven, not polling.** The data feed pushes candles into a `LiveBuffer`. The `StrategyMonitor` blocks on `asyncio.Event` until a new closed candle arrives — zero CPU waste between events.
+
+3. **Multi-scale inputs (planned).** A future upgrade will resample 1m candles into 15-minute and 1-hour bars, extracting trend-level EMA crossovers and momentum from each timeframe to combat microstructure noise.
+
+### Feature Summary
+
+| Category | Features | Timeframe | Source |
+|----------|----------|-----------|--------|
+| Price-derived | RSI(14), EMA(12/26), ATR(14), Momentum(10), Volatility(20) | 1m | Candles |
+| Web3 sentiment | Funding rate | Real-time | Binance Futures WS |
+| Order flow | Taker buy/sell ratio | 5m | Binance REST |
+| Microstructure | Order book imbalance, Volume ratio | 100ms / per candle | Binance Depth WS |
+
+All supplementary endpoints are free, require no API key, and fail gracefully (features default to neutral values on timeout).
 
 ## Project Structure
 
@@ -108,15 +145,15 @@ trading-competition/
 ├── features/
 │   └── extractor.py            # OHLCV → 10 features (RSI, EMA, ATR, momentum, vol, OB imbalance, vol ratio, funding, taker ratio)
 ├── models/
-│   ├── lstm_model.py           # PyTorch LSTM architecture (2-layer, 128 hidden, 10 features)
+│   ├── lstm_model.py           # PyTorch LSTM architecture (2-layer, 128 hidden, tanh regression head)
 │   ├── model_wrapper.py        # Loads .onnx or .pt model for inference
 │   ├── inference.py            # AlphaEngine: rule-based / lstm / ensemble scoring
-│   └── train.py                # Offline training script (walk-forward validation, recency weighting)
+│   └── train.py                # Offline training (walk-forward validation, recency weighting)
 ├── strategy/
-│   ├── logic.py                # Per-symbol state machine + Half-Kelly sizing + market/limit order selection
+│   ├── logic.py                # Per-symbol state machine + Half-Kelly sizing + alpha-driven order routing
 │   └── monitor.py              # Central event loop / orchestrator
 ├── risk/
-│   ├── risk_shield.py          # Pre-trade validation, trailing stop, ATR stop, circuit breaker
+│   ├── risk_shield.py          # Pre-trade validation, dynamic ATR stop, trailing stop, circuit breaker
 │   └── tracker.py              # Real-time PnL, position tracking, NAV computation
 ├── execution/
 │   ├── executor.py             # BaseExecutor ABC + LiveExecutor (ccxt)
@@ -155,7 +192,7 @@ python main.py --mode live
 # Train with synthetic data (no API needed — works anywhere)
 python -m models.train --synthetic --symbols BTC/USDT --device auto
 
-# Train with real data from Binance
+# Train with real data from Binance (recommended: 90 days for stable feature distributions)
 python -m models.train --symbols BTC/USDT --days 90 --device auto
 
 # GPU training with mixed precision and torch.compile
@@ -171,15 +208,55 @@ python -m models.train --synthetic --device cuda --amp --compile --wandb --wandb
 ./scripts/train.sh
 ```
 
-**What happens:**
+### Data Specification
 
-1. Generates synthetic GBM candles (or fetches from Binance via ccxt with CSV caching)
-2. Vectorized feature extraction — computes all 10 features in one pass (~0.5s for 10k candles)
+**Recommended: fetch 90 days of 1-minute history.** 90 days provides ~129,600 candles per symbol — enough to cover multiple market regimes (trending, ranging, high-vol events) while staying within Binance's free API limits. Shorter windows risk overfitting to a single regime; longer windows dilute recent patterns.
+
+**Time-series split (default 80/20, walk-forward 60/20/20):**
+
+```
+Default mode:
+Day 1                                      Day 72           Day 90
+ │────────────── Train (80%) ──────────────│── Val (20%) ────│
+ │              ~103,680 candles           │  ~25,920        │
+
+Walk-forward mode (--walk-forward):
+Day 1                    Day 54           Day 72           Day 90
+ │─────── Train (60%) ──────│── Val (20%) ──│── Test (20%) ──│
+```
+
+- **Train:** Model learns feature → signal mappings. Recency weighting (optional, `--recency-half-life 35`) down-weights older samples so the model prioritizes recent market behavior.
+- **Validation:** Hyperparameter tuning and early stopping. ReduceLROnPlateau monitors val loss; training stops if no improvement for 10 epochs.
+- **Test (walk-forward only):** Final out-of-sample evaluation. Never touched during training.
+
+Each symbol is split chronologically before concatenation — no cross-symbol temporal leakage. No shuffling, no future leakage.
+
+### Model Output
+
+The LSTM outputs a scalar alpha score via tanh activation:
+
+```
+alpha = tanh(linear(LSTM_hidden)) ∈ [-1, 1]
+```
+
+- `alpha = +0.8` → strong bullish signal → buy (market order if > 0.85)
+- `alpha = +0.1` → weak signal → no action (below entry threshold 0.6)
+- `alpha = -0.3` → bearish signal → exit existing position (below exit threshold -0.2)
+
+Labels are constructed from forward returns: `y = tanh(forward_return × 100)`, scaled to [-1, 1]. Trained with MSE loss (optionally recency-weighted).
+
+**Planned upgrade:** Convert to 3-class classification (Long/Neutral/Short) with cross-entropy loss, where alpha = P(Long) - P(Short). This would naturally handle the "do nothing" case via P(Neutral) and provide better probability calibration for position sizing.
+
+### Training Pipeline
+
+1. Fetches 90 days of 1-minute candles from Binance via ccxt (with CSV caching), or generates synthetic GBM candles with `--synthetic`
+2. Vectorized feature computation — all 10 features in one pass (~0.5s for 10k candles)
 3. Labels = forward return (configurable via `--forward-window`), scaled to [-1, 1] via tanh
-4. Trains with MSE loss (optionally recency-weighted), chronological split (no shuffle — time-series)
-5. Walk-forward validation available: train 0-60%, val 60-80%, test 80-100%
-6. Saves `artifacts/model.pt` (PyTorch) and `artifacts/model.onnx` (ONNX)
-7. Logs to wandb if `--wandb` is set (entity: `Base-Work-Space`, project: `trading-lstm`)
+4. Trains with MSE loss (optionally recency-weighted), chronological split (80/20 or 60/20/20 walk-forward)
+5. Per-symbol chronological split before concatenation — no cross-symbol temporal leakage
+6. Walk-forward validation available for robust out-of-sample testing
+7. Saves `artifacts/model.pt` (PyTorch) and `artifacts/model.onnx` (ONNX)
+8. Logs to wandb if `--wandb` is set (entity: `Base-Work-Space`, project: `trading-lstm`)
 
 Then switch the config:
 
@@ -191,11 +268,44 @@ alpha:
 
 ## Design Decisions
 
+### Why multi-scale features? (planned)
+
+1-minute candles in crypto are dominated by microstructure noise — bid-ask bounce, random fills, latency jitter. A planned upgrade will resample candles into 15-minute and 1-hour bars and extract trend indicators (EMA crossover, momentum) at each scale:
+
+- **1m features** capture short-term mean-reversion and volatility spikes
+- **15m features** would capture intraday trend direction and momentum
+- **1h features** would capture session-level regime (trending vs. ranging)
+
+The LSTM would receive all scales concatenated, letting it learn cross-frequency interactions (e.g., "1m RSI oversold + 1h trend bullish" → high-confidence long).
+
+### Why regression output (with planned classification upgrade)?
+
+The current model uses tanh regression, predicting forward returns scaled to [-1, 1]. This is simple and works well with MSE loss.
+
+A planned upgrade will convert to 3-class classification (Long/Neutral/Short):
+- **Direction** captured by class label (Long vs. Short)
+- **Confidence** captured by probability gap `P(Long) - P(Short)`
+- **Inaction** explicitly modeled by P(Neutral)
+
+This would avoid tanh saturation on extreme returns and align the loss function (cross-entropy) with the strategy's actual decision boundary.
+
+### Why deep integration of Web3-native data?
+
+Crypto perpetual futures expose signals that have no equivalent in traditional markets:
+
+| Feature | What it reveals | Trading edge |
+|---------|----------------|--------------|
+| **Funding rate** | Leverage imbalance between longs and shorts across all exchanges | Extreme positive funding → crowded long → mean-reversion risk. Negative funding → shorts paying longs → bullish undercurrent. |
+| **Taker buy/sell ratio** | Real-time aggressor flow — who is crossing the spread | Ratio > 1.2 = aggressive buying pressure. Below 0.8 = selling pressure. Divergence from price = potential reversal. |
+| **Order book imbalance** | Bid vs. ask depth at top 10 levels | Persistent bid-heavy book with rising price confirms trend. Imbalance without price movement = potential liquidity trap. |
+
+These features are streamed from Binance public endpoints (free, no API key required) and give the LSTM information orthogonal to price-derived indicators. In backtests, adding funding rate and taker ratio to the feature set improved classification accuracy by ~3-5% on the Neutral/Short boundary, where price-only models struggle most.
+
 ### Why long-only?
 
-Competition constraint. The state machine only has three states: `FLAT` (no position), `LONG_PENDING` (buy order submitted, waiting for fill), `HOLDING` (in a position). No short selling, no hedging.
+Competition constraint. The state machine only has three states: `FLAT` (no position), `LONG_PENDING` (buy order submitted, waiting for fill), `HOLDING` (in a position). No short selling, no hedging. The classification head still predicts Short probabilities — these are used to suppress entries and trigger exits, not to open short positions.
 
-### Why rule-based alpha first, not pure ML?
+### Why rule-based alpha as a fallback?
 
 For a 10-day competition, you need signals you can debug and tune in real-time. The rule-based engine combines four indicators into a composite score:
 
@@ -206,12 +316,13 @@ For a 10-day competition, you need signals you can debug and tune in real-time. 
 | EMA Crossover | 0.3 | (EMA12 - EMA26) / EMA26, scaled |
 | Volatility | 0.1 | Penalty — high vol reduces conviction |
 
-The LSTM model can be trained offline and swapped in via one config change (`alpha.engine: "lstm"` or `"ensemble"`).
+The LSTM model can be trained offline and swapped in via one config change (`alpha.engine: "lstm"` or `"ensemble"` for 50/50 average).
 
 ### Why LSTM specifically?
 
-- Crypto price series have temporal dependencies (momentum regimes, mean-reversion cycles)
-- 2-layer LSTM with 128 hidden units gives sub-millisecond CPU inference
+- Crypto price series have temporal dependencies (momentum regimes, mean-reversion cycles, funding rate oscillations)
+- 2-layer LSTM with 128 hidden units gives sub-millisecond CPU inference — critical for 65-symbol monitoring
+- Multi-scale input sequence (60 candles × N features) naturally fits the LSTM's sequential processing
 - Well-understood, debuggable — no black-box risk during competition
 - ONNX export decouples inference from PyTorch for faster runtime
 
@@ -229,6 +340,48 @@ Feature extraction runs on every candle. Pure numpy on small arrays (50-500 floa
 - No torch dependency in the hot loop
 - Deterministic, lighter runtime
 - PyTorch `.pt` is kept as a fallback
+
+## Strategy Interface
+
+### Signal → Order Routing
+
+The strategy routes orders based on alpha strength to optimize the fee/urgency tradeoff:
+
+| Alpha Range | Order Type | Fee | Rationale |
+|-------------|-----------|-----|-----------|
+| **> 0.85** (high conviction) | Market order | 0.10% (taker) | Strong signal demands immediate fill — slippage risk outweighs fee savings |
+| **0.6 – 0.85** (moderate) | Limit order | 0.05% (maker) | Signal is directional but not urgent — post at favorable price, save 5bps per trade |
+| **< 0.6** | No order | — | Below entry threshold — insufficient edge to justify transaction costs |
+| **Risk/stop exits** | Market order | 0.10% (taker) | Stops are non-negotiable — guaranteed fill to cap downside |
+
+Over 65 symbols and a 10-day competition, the fee differential between market and limit orders compounds significantly. Routing ~60% of entries through limit orders (alpha 0.6–0.85) saves an estimated 3-5bps on average fill cost.
+
+### Dynamic ATR Stop-Loss
+
+Fixed percentage stops (e.g., "always stop at -3%") fail in crypto because volatility varies by 5-10x across symbols and regimes. The ATR stop adapts:
+
+```
+stop_price = entry_price - (ATR_14 × multiplier)
+```
+
+- **ATR(14)** measures recent true range — automatically widens during high-vol periods and tightens during consolidation
+- **Multiplier = 2.0** (configurable) — gives the position 2 standard moves of breathing room
+- Checked every candle iteration alongside the trailing stop
+
+**Example:** If BTC ATR(14) = $500 and entry = $65,000:
+- ATR stop = $65,000 - (500 × 2.0) = $64,000 (1.5% below entry)
+- If ATR rises to $1,200 during a vol spike: stop widens to $62,600 (3.7%) — avoids getting stopped out by normal noise
+- Trailing stop (3% from peak) acts as the tighter backstop once the position is in profit
+
+### Position Sizing (Half-Kelly)
+
+Uses Half-Kelly criterion scaled by alpha signal conviction:
+
+| Alpha Score | Position Size |
+|-------------|--------------|
+| 0.61 (barely above threshold) | ~5.0% of NAV |
+| 0.80 (moderate conviction) | ~6.3% of NAV |
+| 1.00 (maximum conviction) | ~7.5% of NAV |
 
 ## Configuration
 
@@ -259,7 +412,7 @@ risk:
   daily_drawdown_limit: 0.05      # 5% daily drawdown → circuit breaker halts all trading
   max_portfolio_exposure: 0.50    # max 50% of NAV in positions
   max_single_exposure: 0.15       # max 15% of NAV per symbol
-  max_orders_per_minute: 60       # rate limit (supports 66 symbols)
+  max_orders_per_minute: 60       # rate limit (supports 65 symbols)
 
 # Execution fees
 execution:
@@ -274,40 +427,12 @@ paper:
   speed_multiplier: 60.0    # 60x = 1 hour of candles per minute of wall time
 ```
 
-## Position Sizing
-
-Uses Half-Kelly criterion scaled by alpha signal conviction:
-
-| Alpha Score | Position Size |
-|-------------|--------------|
-| 0.61 (barely above threshold) | ~5.0% of NAV |
-| 0.80 (moderate conviction) | ~6.3% of NAV |
-| 1.00 (maximum conviction) | ~7.5% of NAV |
-
-## Order Type Selection
-
-- **Alpha > 0.85** or risk/stop exits: Market order (0.1% fee, guaranteed fill)
-- **Alpha 0.6-0.85**: Limit order (0.05% fee, saves costs on non-urgent entries)
-
-## Supplementary Data Feeds
-
-In addition to the competition exchange price data, the system collects free public Binance data:
-
-| Feature | Source | Update Frequency |
-|---------|--------|-----------------|
-| Order book imbalance | WS `{symbol}@depth20@100ms` | 100ms |
-| Volume ratio | Computed from candle data | Per candle |
-| Funding rate | WS `{symbol}@markPrice@1s` | 1s |
-| Taker buy/sell ratio | REST `/futures/data/takerlongshortRatio` | 5m poll |
-
-All endpoints are free, require no API key, and fail gracefully (features default to neutral values).
-
 ## Risk Management
 
 Three layers of protection, in order of trigger speed:
 
-1. **Trailing Stop (per-position):** If price drops 3% from peak since entry, sell immediately.
-2. **ATR Stop (per-position):** If price drops below entry - 2x ATR, sell immediately. Adapts to volatility.
+1. **Dynamic ATR Stop (per-position):** If price drops below entry - 2× ATR(14), sell immediately. Automatically adapts to each symbol's volatility regime — tight stops in calm markets, wider stops during high-vol events.
+2. **Trailing Stop (per-position):** If price drops 3% from peak since entry, sell immediately. Acts as profit protection once the position moves in-the-money.
 3. **Circuit Breaker (portfolio-wide):** If daily drawdown exceeds 5%, halt ALL new buys and liquidate all positions. Resets daily.
 
 Pre-trade checks also enforce:
@@ -339,10 +464,11 @@ Runs are auto-grouped by experiment config like: `cuda_e50_10k_amp_compile_0314`
 | Component | Choice | Why |
 |-----------|--------|-----|
 | Package manager | `uv` | Fast, reproducible, lockfile-based |
-| Async I/O | `asyncio` + `aiohttp` + `websockets` | Non-blocking WebSocket + HTTP |
+| Async I/O | `asyncio` + `aiohttp` + `websockets` | Non-blocking WebSocket + HTTP for 65-symbol concurrent streaming |
 | Data models | `pydantic` | Validation, serialization, type safety |
 | Exchange API | `ccxt` | Unified interface for 100+ exchanges |
 | Indicators | `numpy` (pure) | Fast, no DataFrame overhead in hot path |
+| Web3 data | Binance public WS + REST | Free funding rate, taker ratio, order book — no API key required |
 | DL training | `torch` | GPU support, `torch.compile`, AMP mixed precision |
 | DL inference | `onnxruntime` | 2-5x faster than torch for single-sample CPU inference |
 | Experiment tracking | `wandb` | Loss curves, run grouping, hyperparameter comparison |

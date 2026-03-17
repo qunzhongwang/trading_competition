@@ -94,10 +94,34 @@ class SimExecutor(BaseExecutor):
         )
 
     async def get_status(self, order_id: str, symbol: str) -> Order:
-        if order_id in self._pending_orders:
-            return self._pending_orders[order_id]
-        return Order(
-            order_id=order_id, symbol=symbol,
-            side=Side.BUY, order_type=OrderType.MARKET,
-            quantity=0, status=OrderStatus.CANCELLED,
-        )
+        order = self._pending_orders.get(order_id)
+        if order is None:
+            return Order(
+                order_id=order_id, symbol=symbol,
+                side=Side.BUY, order_type=OrderType.MARKET,
+                quantity=0, status=OrderStatus.CANCELLED,
+            )
+
+        # Recheck current price against limit price
+        candle = await self._buffer.get_latest_candle(order.symbol)
+        if candle is not None:
+            price = candle.close
+            can_fill = False
+            if order.side == Side.BUY and order.price is not None and price <= order.price:
+                can_fill = True
+            elif order.side == Side.SELL and order.price is not None and price >= order.price:
+                can_fill = True
+
+            if can_fill:
+                order.filled_price = order.price
+                order.filled_quantity = order.quantity
+                order.filled_at = datetime.utcnow()
+                order.status = OrderStatus.FILLED
+                self._pending_orders.pop(order_id, None)
+                logger.info(
+                    "SIM LIMIT filled on recheck: %s %s qty=%.6f @ %.2f (market=%.2f)",
+                    order.side.value, order.symbol,
+                    order.filled_quantity, order.filled_price, price,
+                )
+
+        return order

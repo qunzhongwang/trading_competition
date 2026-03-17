@@ -322,7 +322,7 @@ def _compute_all_features(candles: List[OHLCV], extractor: FeatureExtractor) -> 
                      abs(lows[i] - closes[i - 1]))
     cum_tr = np.cumsum(tr)
     atr_all = np.zeros(n, dtype=np.float64)
-    for i in range(atr_p + 1, n):
+    for i in range(atr_p, n):
         atr_all[i] = (cum_tr[i] - cum_tr[i - atr_p]) / atr_p
 
     # ── Momentum: rate of change (fully vectorized) ──
@@ -753,21 +753,41 @@ def main():
         all_X.append(X)
         all_y.append(y)
 
-    X = np.concatenate(all_X, axis=0)
-    y = np.concatenate(all_y, axis=0)
-
-    # Chronological split (no shuffle for time-series)
+    # Per-symbol chronological split, then concatenate — avoids temporal leakage
+    # when training on multiple symbols
     if args.walk_forward:
         # Walk-forward: train 0-60%, val 60-80%, test 80-100%
-        split1 = int(len(X) * 0.6)
-        split2 = int(len(X) * 0.8)
-        X_train, X_val, X_test = X[:split1], X[split1:split2], X[split2:]
-        y_train, y_val, y_test = y[:split1], y[split1:split2], y[split2:]
+        X_trains, X_vals, X_tests = [], [], []
+        y_trains, y_vals, y_tests = [], [], []
+        for X_sym, y_sym in zip(all_X, all_y):
+            s1 = int(len(X_sym) * 0.6)
+            s2 = int(len(X_sym) * 0.8)
+            X_trains.append(X_sym[:s1])
+            X_vals.append(X_sym[s1:s2])
+            X_tests.append(X_sym[s2:])
+            y_trains.append(y_sym[:s1])
+            y_vals.append(y_sym[s1:s2])
+            y_tests.append(y_sym[s2:])
+        X_train = np.concatenate(X_trains)
+        X_val = np.concatenate(X_vals)
+        X_test = np.concatenate(X_tests)
+        y_train = np.concatenate(y_trains)
+        y_val = np.concatenate(y_vals)
+        y_test = np.concatenate(y_tests)
         logger.info("Walk-forward split: Train=%d, Val=%d, Test=%d", len(X_train), len(X_val), len(X_test))
     else:
-        split_idx = int(len(X) * (1 - args.val_split))
-        X_train, X_val = X[:split_idx], X[split_idx:]
-        y_train, y_val = y[:split_idx], y[split_idx:]
+        X_trains, X_vals = [], []
+        y_trains, y_vals = [], []
+        for X_sym, y_sym in zip(all_X, all_y):
+            split_idx = int(len(X_sym) * (1 - args.val_split))
+            X_trains.append(X_sym[:split_idx])
+            X_vals.append(X_sym[split_idx:])
+            y_trains.append(y_sym[:split_idx])
+            y_vals.append(y_sym[split_idx:])
+        X_train = np.concatenate(X_trains)
+        X_val = np.concatenate(X_vals)
+        y_train = np.concatenate(y_trains)
+        y_val = np.concatenate(y_vals)
 
     logger.info("Train: %d samples, Val: %d samples", len(X_train), len(X_val))
 

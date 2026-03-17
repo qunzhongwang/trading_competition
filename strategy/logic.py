@@ -77,7 +77,7 @@ class StrategyLogic:
                     order_type_label = "MARKET"
                 else:
                     order_type = OrderType.LIMIT
-                    price = round(current_price * (1 + self._limit_offset_bps / 10000), 8)
+                    price = round(current_price * (1 - self._limit_offset_bps / 10000), 8)
                     order_type_label = "LIMIT"
 
                 self._state = StrategyState.LONG_PENDING
