@@ -76,17 +76,29 @@ def _apply_env_overrides(config: dict) -> None:
     """Override config values from environment variables (never commit secrets).
 
     Competition keys (ROOSTOO_COMP_*) take priority over testing keys (ROOSTOO_*).
+    Key and secret are treated as a pair — both must be set for either tier.
     """
     roostoo_cfg = config.setdefault("roostoo", {})
-    # Competition keys take priority over testing keys
-    if os.environ.get("ROOSTOO_COMP_API_KEY"):
-        roostoo_cfg["api_key"] = os.environ["ROOSTOO_COMP_API_KEY"]
-    elif os.environ.get("ROOSTOO_API_KEY"):
-        roostoo_cfg["api_key"] = os.environ["ROOSTOO_API_KEY"]
-    if os.environ.get("ROOSTOO_COMP_API_SECRET"):
-        roostoo_cfg["api_secret"] = os.environ["ROOSTOO_COMP_API_SECRET"]
-    elif os.environ.get("ROOSTOO_API_SECRET"):
-        roostoo_cfg["api_secret"] = os.environ["ROOSTOO_API_SECRET"]
+
+    comp_key = os.environ.get("ROOSTOO_COMP_API_KEY", "")
+    comp_secret = os.environ.get("ROOSTOO_COMP_API_SECRET", "")
+    test_key = os.environ.get("ROOSTOO_API_KEY", "")
+    test_secret = os.environ.get("ROOSTOO_API_SECRET", "")
+
+    if comp_key and comp_secret:
+        roostoo_cfg["api_key"] = comp_key
+        roostoo_cfg["api_secret"] = comp_secret
+        logger.info("Using competition Roostoo API credentials")
+    elif comp_key or comp_secret:
+        logger.warning("ROOSTOO_COMP_API_KEY and ROOSTOO_COMP_API_SECRET must both be set; ignoring partial comp credentials")
+        if test_key and test_secret:
+            roostoo_cfg["api_key"] = test_key
+            roostoo_cfg["api_secret"] = test_secret
+            logger.info("Falling back to testing Roostoo API credentials")
+    elif test_key and test_secret:
+        roostoo_cfg["api_key"] = test_key
+        roostoo_cfg["api_secret"] = test_secret
+        logger.info("Using testing Roostoo API credentials")
 
     exchange_cfg = config.setdefault("exchange", {})
     if os.environ.get("BINANCE_API_KEY"):
