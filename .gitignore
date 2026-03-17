@@ -25,6 +25,9 @@ logs/
 
 .coverage
 
+# Environment secrets
+.env
+!.env.example
 htmlcov/
 
 wandb/

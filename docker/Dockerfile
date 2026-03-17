@@ -1,5 +1,5 @@
 # ---------- build stage ----------
-FROM python:3.10-slim AS builder
+FROM python:3.11-slim AS builder
 
 # Install uv for fast dependency resolution
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
@@ -12,7 +12,7 @@ RUN uv venv .venv \
     && uv sync --no-dev --extra-index-url https://download.pytorch.org/whl/cpu
 
 # ---------- runtime stage ----------
-FROM python:3.10-slim
+FROM python:3.11-slim
 
 WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
@@ -21,8 +21,15 @@ COPY . .
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1
 
+# Create logs directory
+RUN mkdir -p logs
+
 EXPOSE 8080
 
 ENTRYPOINT ["python", "main.py"]
-# Override mode or config at runtime:
-#   docker run trading-bot --mode live --config config/my_config.yaml
+# Competition mode:
+#   docker run -e ROOSTOO_API_KEY=... -e ROOSTOO_API_SECRET=... trading-bot --mode roostoo
+# Paper mode:
+#   docker run trading-bot
+# Live (Binance) mode:
+#   docker run -e BINANCE_API_KEY=... -e BINANCE_API_SECRET=... trading-bot --mode live

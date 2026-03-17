@@ -109,3 +109,18 @@ class PortfolioSnapshot(BaseModel):
     daily_pnl: float = 0.0
     peak_nav: float = 0.0
     drawdown: float = 0.0
+
+
+class RiskMetrics(BaseModel):
+    """Risk-adjusted performance metrics for competition scoring.
+
+    Competition score = 0.4 * Sortino + 0.3 * Sharpe + 0.3 * Calmar
+    """
+    sharpe_ratio: float = 0.0
+    sortino_ratio: float = 0.0
+    calmar_ratio: float = 0.0
+    composite_score: float = 0.0
+    annualized_return: float = 0.0
+    max_drawdown: float = 0.0
+    total_return_pct: float = 0.0
+    n_trading_days: int = 0

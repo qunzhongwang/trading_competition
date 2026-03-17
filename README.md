@@ -1,6 +1,8 @@
 # Web3 Long-Only Quant Trading Framework
 
-Algorithmic trading bot for a 10-day crypto trading competition. Long-only, event-driven, async Python.
+Algorithmic trading bot for the Roostoo 10-day crypto trading competition. Long-only, event-driven, async Python.
+
+**Architecture:** Binance WebSocket for real-time OHLCV data (high quality, free). Roostoo REST API for order execution and balance tracking on the mock exchange.
 
 ## Quick Start
 
@@ -20,19 +22,107 @@ uv sync
 python main.py
 ```
 
-That's it. The bot will generate synthetic price data and trade against it. Press `Ctrl+C` to stop — it prints a final PnL report on shutdown.
+That's it. The bot will generate synthetic price data and trade against it. Press `Ctrl+C` to stop — it prints a final PnL report with risk metrics on shutdown.
 
 ### Docker (alternative)
 
 ```bash
 # Build image (CPU-only torch, ~1.2 GB)
-docker build -t trading-bot .
+docker build -t trading-bot -f docker/Dockerfile .
 
 # Run paper mode
 docker run --rm trading-bot
 
-# Run live mode with custom config
-docker run --rm -v $(pwd)/config:/app/config trading-bot --mode live --config config/my_config.yaml
+# Run Roostoo competition mode
+docker run --rm --env-file .env trading-bot --mode roostoo
+
+# Run live (Binance) mode
+docker run --rm -e BINANCE_API_KEY=... -e BINANCE_API_SECRET=... trading-bot --mode live
+```
+
+## Roostoo Competition Mode
+
+### Setup
+
+```bash
+# 1. Copy the example env and fill in your API keys
+cp .env.example .env
+# Edit .env with your Roostoo API credentials
+
+# 2. Test locally
+python main.py --mode roostoo
+
+# 3. Deploy to AWS EC2 (see below)
+```
+
+The `.env` file supports two sets of Roostoo credentials:
+- **Testing API** (`ROOSTOO_API_KEY` / `ROOSTOO_API_SECRET`): General portfolio testing against the mock exchange
+- **Competition API** (`ROOSTOO_COMP_API_KEY` / `ROOSTOO_COMP_API_SECRET`): Reserved for the live competition — swap these in when received
+
+### How Roostoo Mode Works
+
+```
+Binance WebSocket ──(real-time 1m candles)──> LiveBuffer ──> StrategyMonitor
+                                                                    │
+                                              Feature extraction + Alpha scoring
+                                                                    │
+                                              Order decision + Risk validation
+                                                                    │
+                                    Roostoo REST API <──(BTC/USDT → BTC/USD mapping)
+                                              │
+                            POST /v3/place_order (HMAC SHA256 signed)
+```
+
+- **Data source:** Binance WebSocket (65 symbols × 1m candles). Free, high quality, already implemented.
+- **Execution:** Roostoo REST API. Symbol mapping converts internal `BTC/USDT` → `BTC/USD` at the executor boundary.
+- **Auth:** HMAC SHA256 signature on sorted query params. Auto-validates server time drift.
+- **Trade logging:** All orders, signals, and API calls logged to `logs/trades_{date}.jsonl`.
+
+### Competition Details
+
+| Parameter | Value |
+|-----------|-------|
+| Starting capital | $1,000,000 |
+| Trading pairs | 65 (see `config/default.yaml`) |
+| Fees | 0.1% taker (market), 0.05% maker (limit) |
+| Constraints | Spot only, no short selling, no HFT/arbitrage |
+| Duration | Mar 21-31 (at least 8 active trading days) |
+
+**Scoring:**
+- Screen 2: Portfolio return (qualifier)
+- Screen 3 (40%): `0.4 × Sortino + 0.3 × Sharpe + 0.3 × Calmar`
+- Screen 4 (60%): Code quality, strategy clarity, runnability
+
+### AWS EC2 Deployment
+
+```bash
+# 1. Deploy to EC2 (installs Python 3.11, uv, clones repo, sets up systemd)
+./scripts/deploy_aws.sh <EC2_HOST> [~/.ssh/your-key.pem]
+
+# 2. SSH into EC2 and set up API keys
+ssh -i ~/.ssh/your-key.pem ubuntu@<EC2_HOST>
+cat > /home/ubuntu/trading_competition/.env << 'EOF'
+ROOSTOO_API_KEY=your_key_here
+ROOSTOO_API_SECRET=your_secret_here
+EOF
+
+# 3. Start the bot (systemd — auto-restarts on crash)
+sudo systemctl start trading-bot
+
+# 4. Monitor logs
+journalctl -u trading-bot -f
+
+# Or check trade logs
+tail -f /home/ubuntu/trading_competition/logs/trades_*.jsonl
+```
+
+Alternative — run directly without systemd:
+
+```bash
+# On EC2
+cd /home/ubuntu/trading_competition
+./scripts/start_competition.sh
+# Includes auto-restart (max 5 retries with backoff)
 ```
 
 ## Scripts
@@ -41,6 +131,8 @@ All scripts live in `scripts/` with comments and configurable env vars:
 
 ```bash
 ./scripts/start.sh              # Production runner with auto-restart (up to 50 retries)
+./scripts/start_competition.sh  # Roostoo competition mode runner (auto-restart, env validation)
+./scripts/deploy_aws.sh         # Deploy to AWS EC2 (system setup + systemd service)
 ./scripts/paper_trade.sh        # Quick paper trading session
 ./scripts/train.sh              # Train LSTM with synthetic data
 ./scripts/test.sh               # Run tests with coverage
@@ -59,7 +151,7 @@ CONFIG=config/fast.yaml ./scripts/paper_trade.sh # Custom config
 ## Testing
 
 ```bash
-# Run all tests (158 tests, ~27s)
+# Run all tests (157 tests, ~12s)
 pytest
 
 # Single file or test
@@ -105,7 +197,14 @@ Test modules cover: Pydantic models, feature extraction (RSI/EMA/ATR/momentum/vo
                               trailing stop,           limit if α ∈ [0.6, 0.85])
                               circuit breaker)                    │
                                                     PortfolioTracker.on_fill()
+                                                    TradeLogger (JSONL)
+                                                    RiskMetrics (Sortino/Sharpe/Calmar)
 ```
+
+**Executors:**
+- **Paper mode:** `SimExecutor` — instant fills with slippage simulation
+- **Live mode:** `LiveExecutor` — real orders via ccxt (Binance)
+- **Roostoo mode:** `RoostooExecutor` — HMAC-signed REST API to Roostoo mock exchange
 
 **Core design principles:**
 
@@ -131,19 +230,27 @@ All supplementary endpoints are free, require no API key, and fail gracefully (f
 ```
 trading-competition/
 ├── config/
-│   └── default.yaml            # All tunable parameters (thresholds, risk limits, fees)
+│   └── default.yaml            # All tunable parameters (65 symbols, thresholds, risk limits, fees)
 ├── artifacts/                  # Model checkpoints (.pt, .onnx) — gitignored
-├── logs/                       # Rotating log files — gitignored
-├── scripts/                    # Shell scripts for common operations
+├── logs/                       # Rotating log files + trade JSONL — gitignored
+├── scripts/
+│   ├── start.sh                # Production runner with auto-restart
+│   ├── start_competition.sh    # Roostoo competition runner
+│   ├── deploy_aws.sh           # AWS EC2 deployment script
+│   ├── paper_trade.sh          # Quick paper trading session
+│   ├── train.sh / test.sh      # Training and testing
+│   ├── export_model.sh         # .pt → .onnx export
+│   └── generate_data.sh        # Synthetic CSV data generation
 ├── core/
-│   └── models.py               # Pydantic data models (Tick, OHLCV, Signal, Order, Position)
+│   └── models.py               # Pydantic models (Tick, OHLCV, Signal, Order, Position, RiskMetrics)
 ├── data/
 │   ├── buffer.py               # asyncio.Event-driven sliding window for candles + supplementary data
 │   ├── connector.py            # Binance WebSocket connector (live) + BinanceSupplementaryFeed
 │   ├── sim_feed.py             # Synthetic GBM candle generator (paper mode)
+│   ├── roostoo_auth.py         # HMAC SHA256 authentication for Roostoo API
 │   └── historical/             # Cached CSV from ccxt (auto-created by training script)
 ├── features/
-│   └── extractor.py            # OHLCV → 10 features (RSI, EMA, ATR, momentum, vol, OB imbalance, vol ratio, funding, taker ratio)
+│   └── extractor.py            # OHLCV → 10 features (vectorized + iterative fallback)
 ├── models/
 │   ├── lstm_model.py           # PyTorch LSTM architecture (2-layer, 128 hidden, tanh regression head)
 │   ├── model_wrapper.py        # Loads .onnx or .pt model for inference
@@ -154,12 +261,17 @@ trading-competition/
 │   └── monitor.py              # Central event loop / orchestrator
 ├── risk/
 │   ├── risk_shield.py          # Pre-trade validation, dynamic ATR stop, trailing stop, circuit breaker
-│   └── tracker.py              # Real-time PnL, position tracking, NAV computation
+│   └── tracker.py              # Real-time PnL, positions, NAV, Sortino/Sharpe/Calmar computation
 ├── execution/
 │   ├── executor.py             # BaseExecutor ABC + LiveExecutor (ccxt)
+│   ├── roostoo_executor.py     # RoostooExecutor — REST API with HMAC auth, symbol mapping
 │   ├── sim_executor.py         # Paper trading executor (instant fills + slippage)
-│   └── order_manager.py        # Order lifecycle, fill callbacks
+│   ├── order_manager.py        # Order lifecycle, fill callbacks
+│   └── trade_logger.py         # Structured JSONL trade/signal/API event logging
+├── docker/
+│   └── Dockerfile              # Multi-stage build (Python 3.11, CPU torch)
 ├── main.py                     # Entry point — wires everything, runs asyncio loop
+├── .env.example                # Template for API credentials
 └── pyproject.toml              # uv project config + dependencies
 ```
 
@@ -176,6 +288,24 @@ python main.py
 - No API keys needed, no network access
 - Speed controlled by `paper.speed_multiplier` in config (default 60x = 1 hour per minute)
 
+### Roostoo Competition Mode
+
+```bash
+# Set API keys (one-time)
+cp .env.example .env
+# Edit .env with your credentials
+
+# Run
+python main.py --mode roostoo
+```
+
+- Connects to **Binance WebSocket** for real-time 1m candle data (65 symbols)
+- Executes orders on **Roostoo mock exchange** via signed REST API
+- Symbol mapping: internal `BTC/USDT` → Roostoo `BTC/USD` at executor boundary
+- Syncs balance from Roostoo on startup
+- Logs all trades to `logs/trades_{date}.jsonl`
+- Computes risk-adjusted metrics (Sortino, Sharpe, Calmar) continuously
+
 ### Live Mode
 
 ```bash
@@ -184,7 +314,21 @@ python main.py --mode live
 
 - Connects to Binance via WebSocket for real-time kline data
 - Executes orders via ccxt async exchange client
-- Requires API keys in `config/default.yaml` or a custom config file
+- Requires Binance API keys in `.env` or config
+
+## Risk Metrics
+
+Competition score is 40% risk-adjusted performance. The tracker computes these continuously:
+
+| Metric | Formula | Weight |
+|--------|---------|--------|
+| Sortino Ratio | `mean_excess_return / downside_std × √365` | 40% |
+| Sharpe Ratio | `mean_excess_return / total_std × √365` | 30% |
+| Calmar Ratio | `annualized_return / max_drawdown` | 30% |
+
+**Composite = 0.4 × Sortino + 0.3 × Sharpe + 0.3 × Calmar**
+
+Metrics are logged periodically during trading and in the final shutdown report.
 
 ## Training the LSTM Model
 
@@ -388,6 +532,20 @@ Uses Half-Kelly criterion scaled by alpha signal conviction:
 All parameters live in `config/default.yaml`. Key settings:
 
 ```yaml
+# Mode: "paper" (default), "live" (Binance), "roostoo" (competition)
+mode: "paper"
+
+# 65 trading pairs (internal format: XXX/USDT for Binance data)
+# Automatically mapped to XXX/USD for Roostoo execution
+symbols:
+  - "BTC/USDT"
+  - "ETH/USDT"
+  # ... 63 more pairs
+
+# Roostoo mock exchange (credentials via .env or env vars)
+roostoo:
+  base_url: "https://mock-api.roostoo.com"
+
 # Which alpha engine to use
 alpha:
   engine: "rule_based"      # "rule_based" | "lstm" | "ensemble"
@@ -421,7 +579,7 @@ execution:
 
 # Paper mode settings
 paper:
-  initial_capital: 100000.0
+  initial_capital: 1000000.0  # $1M (matches competition)
   slippage_bps: 5
   fee_bps: 10
   speed_multiplier: 60.0    # 60x = 1 hour of candles per minute of wall time
@@ -445,6 +603,7 @@ Pre-trade checks also enforce:
 
 Both trading and training sessions log to console + rotating files in `logs/`:
 - Trading: `logs/trading_{mode}_{timestamp}.log`
+- Trade events: `logs/trades_{date}.jsonl` (structured JSONL — orders, signals, API calls)
 - Training: `logs/train_{timestamp}.log`
 
 Files rotate at 10MB with 5 backups.
@@ -466,7 +625,7 @@ Runs are auto-grouped by experiment config like: `cuda_e50_10k_amp_compile_0314`
 | Package manager | `uv` | Fast, reproducible, lockfile-based |
 | Async I/O | `asyncio` + `aiohttp` + `websockets` | Non-blocking WebSocket + HTTP for 65-symbol concurrent streaming |
 | Data models | `pydantic` | Validation, serialization, type safety |
-| Exchange API | `ccxt` | Unified interface for 100+ exchanges |
+| Exchange API | `ccxt` (Binance) + `aiohttp` (Roostoo) | Binance WS for data, Roostoo REST for competition execution |
 | Indicators | `numpy` (pure) | Fast, no DataFrame overhead in hot path |
 | Web3 data | Binance public WS + REST | Free funding rate, taker ratio, order book — no API key required |
 | DL training | `torch` | GPU support, `torch.compile`, AMP mixed precision |

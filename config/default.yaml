@@ -1,14 +1,82 @@
-mode: "paper"  # "paper" | "live"
+mode: "paper"  # "paper" | "live" | "roostoo"
 
 symbols:
   - "BTC/USDT"
   - "ETH/USDT"
+  - "SOL/USDT"
+  - "XRP/USDT"
+  - "DOGE/USDT"
+  - "BNB/USDT"
+  - "TAO/USDT"
+  - "PEPE/USDT"
+  - "ADA/USDT"
+  - "ZEC/USDT"
+  - "PAXG/USDT"
+  - "LINK/USDT"
+  - "SUI/USDT"
+  - "TRUMP/USDT"
+  - "AVAX/USDT"
+  - "FET/USDT"
+  - "DOT/USDT"
+  - "LTC/USDT"
+  - "NEAR/USDT"
+  - "TRX/USDT"
+  - "UNI/USDT"
+  - "BONK/USDT"
+  - "WIF/USDT"
+  - "ENA/USDT"
+  - "PUMP/USDT"
+  - "WLD/USDT"
+  - "PENGU/USDT"
+  - "EIGEN/USDT"
+  - "HBAR/USDT"
+  - "ASTER/USDT"
+  - "AAVE/USDT"
+  - "APT/USDT"
+  - "FIL/USDT"
+  - "VIRTUAL/USDT"
+  - "CFX/USDT"
+  - "SHIB/USDT"
+  - "XPL/USDT"
+  - "ICP/USDT"
+  - "XLM/USDT"
+  - "S/USDT"
+  - "CAKE/USDT"
+  - "ARB/USDT"
+  - "WLFI/USDT"
+  - "CRV/USDT"
+  - "FLOKI/USDT"
+  - "ONDO/USDT"
+  - "ZEN/USDT"
+  - "SEI/USDT"
+  - "TON/USDT"
+  - "POL/USDT"
+  - "PENDLE/USDT"
+  - "TUT/USDT"
+  - "BIO/USDT"
+  - "LINEA/USDT"
+  - "PLUME/USDT"
+  - "1000CHEEMS/USDT"
+  - "FORM/USDT"
+  - "AVNT/USDT"
+  - "LISTA/USDT"
+  - "OPEN/USDT"
+  - "SOMI/USDT"
+  - "HEMI/USDT"
+  - "EDEN/USDT"
+  - "MIRA/USDT"
+  - "BMT/USDT"
 
 exchange:
   name: "binance"
   ws_url: "wss://stream.binance.com:9443/ws"
   api_key: ""
   api_secret: ""
+
+roostoo:
+  base_url: "https://mock-api.roostoo.com"
+  api_key: ""       # env var override: ROOSTOO_API_KEY
+  api_secret: ""    # env var override: ROOSTOO_API_SECRET
 
 data:
   buffer_size: 500          # sliding window length (candles)
@@ -56,7 +124,7 @@ execution:
   fee_limit_bps: 5          # 0.05% maker fee
 
 paper:
-  initial_capital: 100000.0
+  initial_capital: 1000000.0
   slippage_bps: 5
   fee_bps: 10
   replay_file: ""           # optional CSV for deterministic replay
