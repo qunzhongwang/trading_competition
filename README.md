@@ -321,7 +321,7 @@ The LSTM model can be trained offline and swapped in via one config change (`alp
 ### Why LSTM specifically?
 
 - Crypto price series have temporal dependencies (momentum regimes, mean-reversion cycles, funding rate oscillations)
-- 2-layer LSTM with 128 hidden units gives sub-millisecond CPU inference — critical for 66-symbol monitoring
+- 2-layer LSTM with 128 hidden units gives sub-millisecond CPU inference — critical for 65-symbol monitoring
 - Multi-scale input sequence (60 candles × N features) naturally fits the LSTM's sequential processing
 - Well-understood, debuggable — no black-box risk during competition
 - ONNX export decouples inference from PyTorch for faster runtime
@@ -354,7 +354,7 @@ The strategy routes orders based on alpha strength to optimize the fee/urgency t
 | **< 0.6** | No order | — | Below entry threshold — insufficient edge to justify transaction costs |
 | **Risk/stop exits** | Market order | 0.10% (taker) | Stops are non-negotiable — guaranteed fill to cap downside |
 
-Over 66 symbols and a 10-day competition, the fee differential between market and limit orders compounds significantly. Routing ~60% of entries through limit orders (alpha 0.6–0.85) saves an estimated 3-5bps on average fill cost.
+Over 65 symbols and a 10-day competition, the fee differential between market and limit orders compounds significantly. Routing ~60% of entries through limit orders (alpha 0.6–0.85) saves an estimated 3-5bps on average fill cost.
 
 ### Dynamic ATR Stop-Loss
 
@@ -412,7 +412,7 @@ risk:
   daily_drawdown_limit: 0.05      # 5% daily drawdown → circuit breaker halts all trading
   max_portfolio_exposure: 0.50    # max 50% of NAV in positions
   max_single_exposure: 0.15       # max 15% of NAV per symbol
-  max_orders_per_minute: 60       # rate limit (supports 66 symbols)
+  max_orders_per_minute: 60       # rate limit (supports 65 symbols)
 
 # Execution fees
 execution:
@@ -464,7 +464,7 @@ Runs are auto-grouped by experiment config like: `cuda_e50_10k_amp_compile_0314`
 | Component | Choice | Why |
 |-----------|--------|-----|
 | Package manager | `uv` | Fast, reproducible, lockfile-based |
-| Async I/O | `asyncio` + `aiohttp` + `websockets` | Non-blocking WebSocket + HTTP for 66-symbol concurrent streaming |
+| Async I/O | `asyncio` + `aiohttp` + `websockets` | Non-blocking WebSocket + HTTP for 65-symbol concurrent streaming |
 | Data models | `pydantic` | Validation, serialization, type safety |
 | Exchange API | `ccxt` | Unified interface for 100+ exchanges |
 | Indicators | `numpy` (pure) | Fast, no DataFrame overhead in hot path |
