@@ -89,7 +89,7 @@ class TestScoreMethod:
 
 class TestLSTMFallback:
     def test_no_model_returns_zero(self, engine, candles_60):
-        score = engine._lstm_score(candles_60)
+        score = engine._model_score(candles_60)
         assert score == 0.0
 
 

@@ -1,13 +1,15 @@
-"""Offline LSTM training script.
+"""Offline training script for LSTM and Transformer alpha models.
 
 Usage:
     uv run python -m models.train --symbols BTC/USDT ETH/USDT --days 90
+    uv run python -m models.train --parquet-dir /path/to/parquet --model-type transformer
+    uv run python -m models.train --synthetic --symbols BTC/USDT --device auto
 
 Pipeline:
-    1. Fetch historical OHLCV via ccxt REST API (with CSV caching)
+    1. Load OHLCV data (parquet / ccxt REST / synthetic GBM)
     2. Compute features using FeatureExtractor
     3. Build (sequence, label) pairs — label = forward return
-    4. Train LSTM with MSE loss
+    4. Train LSTM or Transformer with MSE loss
     5. Export best model to ONNX
 """
 from __future__ import annotations
@@ -26,6 +28,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
+from tqdm import tqdm
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -262,6 +265,65 @@ def raw_to_ohlcv(raw_data: List[list], symbol: str) -> List[OHLCV]:
     return candles
 
 
+def load_parquet_ohlcv(parquet_dir: str, symbols: Optional[List[str]] = None) -> dict:
+    """Load OHLCV data from parquet files.
+
+    Args:
+        parquet_dir: Directory containing .parquet files
+        symbols: Optional list of symbols to filter. If None, loads all.
+
+    Returns:
+        Dict mapping symbol → List[OHLCV], sorted by timestamp.
+    """
+    import pyarrow.parquet as pq
+    import pyarrow as pa
+
+    parquet_path = Path(parquet_dir)
+    parquet_files = sorted(parquet_path.glob("*.parquet"))
+    if not parquet_files:
+        raise FileNotFoundError(f"No parquet files in {parquet_dir}")
+
+    logger.info("Loading parquet files from %s (%d files)", parquet_dir, len(parquet_files))
+    tables = [pq.read_table(f) for f in parquet_files]
+    table = pa.concat_tables(tables)
+    logger.info("Loaded %d total rows", len(table))
+
+    # Convert to pandas for easy groupby
+    df = table.to_pandas()
+    available_symbols = sorted(df["symbol"].unique())
+    logger.info("Available symbols: %d", len(available_symbols))
+
+    if symbols:
+        missing = set(symbols) - set(available_symbols)
+        if missing:
+            logger.warning("Symbols not found in parquet: %s", missing)
+        df = df[df["symbol"].isin(symbols)]
+    else:
+        symbols = available_symbols
+
+    result = {}
+    for sym in symbols:
+        sym_df = df[df["symbol"] == sym].sort_values("timestamp").reset_index(drop=True)
+        n = len(sym_df)
+        opens = sym_df["open"].values
+        highs = sym_df["high"].values
+        lows = sym_df["low"].values
+        closes = sym_df["close"].values
+        vols = sym_df["volume"].values
+        timestamps = sym_df["timestamp"].dt.tz_localize(None).values.astype("datetime64[us]")
+
+        candles = [
+            OHLCV(symbol=sym, open=float(opens[i]), high=float(highs[i]),
+                   low=float(lows[i]), close=float(closes[i]), volume=float(vols[i]),
+                   timestamp=timestamps[i].item(), is_closed=True)
+            for i in range(n)
+        ]
+        result[sym] = candles
+        logger.info("  %s: %d candles", sym, len(candles))
+
+    return result
+
+
 # ── Dataset Building ────────────────────────────────────────────────────────
 
 def _compute_all_features(candles: List[OHLCV], extractor: FeatureExtractor) -> np.ndarray:
@@ -355,19 +417,30 @@ def _compute_all_features(candles: List[OHLCV], extractor: FeatureExtractor) -> 
     features[min_c:, 4] = mom_all[min_c:]
     features[min_c:, 5] = vol_all[min_c:]
 
-    # Volume ratio: current volume / rolling average (feature index 7)
+    # Volume ratio: current volume / rolling average (feature index 7, vectorized)
     vol_ratio_window = 24
     if n_features > 7:
         cum_vol = np.cumsum(volumes)
-        for i in range(vol_ratio_window + 1, n):
-            avg_vol = (cum_vol[i - 1] - cum_vol[max(0, i - 1 - vol_ratio_window)]) / vol_ratio_window
-            if avg_vol > 1e-10:
-                features[i, 7] = volumes[i] / avg_vol
-            else:
-                features[i, 7] = 1.0
+        # rolling avg = (cum_vol[i-1] - cum_vol[i-1-window]) / window
+        start = vol_ratio_window + 1
+        if start < n:
+            idx = np.arange(start, n)
+            avg_vol = (cum_vol[idx - 1] - cum_vol[idx - 1 - vol_ratio_window]) / vol_ratio_window
+            safe_avg = np.where(avg_vol > 1e-10, avg_vol, 1.0)
+            features[start:, 7] = np.where(avg_vol > 1e-10, volumes[start:] / safe_avg, 1.0)
 
-    # Features 6 (order_book_imbalance), 8 (funding_rate), 9 (taker_ratio)
-    # remain zero in offline training — only populated during live inference
+    # Synthetic supplementary features for training (indices 6, 8, 9)
+    # In live mode these come from Binance feeds. During training we generate
+    # realistic synthetic values so the model learns to use them, avoiding
+    # a train/test distribution mismatch where they'd always be zero.
+    if n_features > 9:
+        rng = np.random.RandomState(42)
+        # order_book_imbalance: centered around 1.0, range ~[0.5, 2.0]
+        features[min_c:, 6] = rng.lognormal(0.0, 0.3, n - min_c).astype(np.float32)
+        # funding_rate: small values centered around 0, range ~[-0.001, 0.001]
+        features[min_c:, 8] = rng.normal(0.0001, 0.0003, n - min_c).astype(np.float32)
+        # taker_ratio: centered around 1.0, range ~[0.6, 1.6]
+        features[min_c:, 9] = rng.lognormal(0.0, 0.2, n - min_c).astype(np.float32)
 
     return features
 
@@ -423,12 +496,35 @@ def build_dataset(
         fwd_return = (fut - cur) / cur if cur > 0 else 0.0
         y[idx, 0] = np.tanh(fwd_return * 100.0)
 
+    # Z-score normalize labels so MSE loss has meaningful gradients
+    y_mean = y.mean()
+    y_std = y.std()
+    if y_std < 1e-8:
+        y_std = 1.0
+    y = (y - y_mean) / y_std
+
     logger.info("Window slicing: %.1fs", time.time() - t0)
-    logger.info("Dataset shape: X=%s, y=%s", X.shape, y.shape)
+    logger.info("Dataset shape: X=%s, y=%s | y_mean=%.4f, y_std=%.4f",
+                X.shape, y.shape, y_mean, y_std)
     return X, y
 
 
 # ── Training ────────────────────────────────────────────────────────────────
+
+def _create_model(model_type: str, n_features: int, **kwargs) -> nn.Module:
+    """Create model by type string with optional architecture overrides."""
+    if model_type == "lstm":
+        lstm_kwargs = {k: v for k, v in kwargs.items()
+                       if k in ("hidden_size", "num_layers", "dropout") and v is not None}
+        return LSTMAlphaModel(n_features=n_features, **lstm_kwargs)
+    elif model_type == "transformer":
+        from models.transformer_model import TransformerAlphaModel
+        tf_kwargs = {k: v for k, v in kwargs.items()
+                     if k in ("d_model", "nhead", "num_layers", "d_ff", "dropout") and v is not None}
+        return TransformerAlphaModel(n_features=n_features, **tf_kwargs)
+    else:
+        raise ValueError(f"Unknown model type: {model_type}")
+
 
 def train_model(
     X_train: np.ndarray,
@@ -443,14 +539,18 @@ def train_model(
     use_amp: bool = False,
     use_compile: bool = False,
     sample_weights: Optional[np.ndarray] = None,
-) -> LSTMAlphaModel:
-    """Train the LSTM model with optional recency-weighted loss."""
+    model_type: str = "lstm",
+    model_kwargs: Optional[dict] = None,
+) -> nn.Module:
+    """Train LSTM or Transformer model with optional recency-weighted loss."""
     # Use GPU if available
     if device == "auto":
         device = "cuda" if torch.cuda.is_available() else "cpu"
-    logger.info("Training on device: %s", device)
+    logger.info("Training on device: %s (model: %s)", device, model_type)
 
-    model = LSTMAlphaModel(n_features=n_features).to(device)
+    model = _create_model(model_type, n_features, **(model_kwargs or {})).to(device)
+    n_params = sum(p.numel() for p in model.parameters())
+    logger.info("Model parameters: %d", n_params)
 
     if use_compile:
         try:
@@ -484,6 +584,19 @@ def train_model(
     best_epoch = 0
     epoch_times: list[float] = []
 
+    # Pre-training validation baseline
+    model.eval()
+    pre_val_loss = 0.0
+    criterion_pre = nn.MSELoss()
+    with torch.no_grad():
+        for xb, yb in val_dl:
+            xb, yb = xb.to(device), yb.to(device)
+            with torch.amp.autocast(device_type=device, enabled=use_amp):
+                pred = model(xb)
+                pre_val_loss += criterion_pre(pred, yb).item() * len(xb)
+    pre_val_loss /= len(val_ds)
+    logger.info("Pre-train val_loss=%.4f (baseline, naive≈1.0)", pre_val_loss)
+
     t_start = time.time()
 
     for epoch in range(epochs):
@@ -492,7 +605,10 @@ def train_model(
         # Train
         model.train()
         train_loss = 0.0
-        for xb, yb, wb in train_dl:
+        n_batches = len(train_dl)
+        pbar = tqdm(train_dl, desc=f"Epoch {epoch+1}/{epochs} [train]",
+                    leave=False, dynamic_ncols=True, mininterval=30)
+        for xb, yb, wb in pbar:
             xb, yb, wb = xb.to(device), yb.to(device), wb.to(device)
             with torch.amp.autocast(device_type=device, enabled=use_amp):
                 pred = model(xb)
@@ -506,19 +622,36 @@ def train_model(
             scaler.step(optimizer)
             scaler.update()
             train_loss += loss.item() * len(xb)
+            pbar.set_postfix(loss=f"{loss.item():.4f}")
+        pbar.close()
         train_loss /= len(train_ds)
 
         # Validate
-        model.train(False)
+        model.eval()
         val_loss = 0.0
         criterion_val = nn.MSELoss()
+        val_example_logged = False
         with torch.no_grad():
             for xb, yb in val_dl:
                 xb, yb = xb.to(device), yb.to(device)
                 with torch.amp.autocast(device_type=device, enabled=use_amp):
                     pred = model(xb)
                     val_loss += criterion_val(pred, yb).item() * len(xb)
+                # Log one example per epoch
+                if not val_example_logged:
+                    ex_pred = pred[0].item()
+                    ex_true = yb[0].item()
+                    ex_input = xb[0, -1, :6].cpu().numpy()
+                    feat_names = ["rsi", "ema_f", "ema_s", "atr", "mom", "vol"]
+                    feat_str = " ".join(f"{n}={v:+.2f}" for n, v in zip(feat_names, ex_input))
+                    val_example_logged = True
         val_loss /= len(val_ds)
+
+        # Log validation example
+        logger.info(
+            "  sample: pred=%.4f true=%.4f err=%.4f | %s",
+            ex_pred, ex_true, abs(ex_pred - ex_true), feat_str,
+        )
 
         scheduler.step(val_loss)
 
@@ -530,7 +663,7 @@ def train_model(
         # Terminal output
         marker = " *" if improved else ""
         logger.info(
-            "Epoch %d/%d  train=%.6f  val=%.6f  lr=%.2e  %.1fs%s",
+            "Epoch %d/%d  train=%.4f  val=%.4f  lr=%.2e  %.1fs%s",
             epoch + 1, epochs, train_loss, val_loss, cur_lr, epoch_dt, marker,
         )
 
@@ -691,8 +824,18 @@ def main():
     )
     parser.add_argument("--n-candles", type=int, default=10000, help="Number of synthetic candles per symbol")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for synthetic data")
+    parser.add_argument("--parquet-dir", default="", help="Load OHLCV from parquet directory (overrides --synthetic and ccxt)")
+    parser.add_argument("--model-type", default="lstm", choices=["lstm", "transformer"], help="Model architecture")
+    # Model architecture overrides
+    parser.add_argument("--hidden-size", type=int, default=None, help="LSTM hidden size (default: 128)")
+    parser.add_argument("--num-layers", type=int, default=None, help="Number of LSTM/Transformer layers")
+    parser.add_argument("--d-model", type=int, default=None, help="Transformer d_model dimension")
+    parser.add_argument("--nhead", type=int, default=None, help="Transformer attention heads")
+    parser.add_argument("--d-ff", type=int, default=None, help="Transformer feedforward dimension")
     parser.add_argument("--amp", action="store_true", help="Enable automatic mixed precision (GPU recommended)")
     parser.add_argument("--compile", action="store_true", help="Enable torch.compile (PyTorch 2.0+, GPU recommended)")
+    parser.add_argument("--save-dataset", default="", help="Pre-build dataset and save to .npz (skip training)")
+    parser.add_argument("--load-dataset", default="", help="Load pre-built dataset from .npz (skip data parsing)")
     # wandb
     parser.add_argument("--wandb", action="store_true", help="Enable wandb experiment tracking")
     parser.add_argument("--wandb-entity", default="Base-Work-Space", help="wandb entity/team")
@@ -714,69 +857,95 @@ def main():
     }
     extractor = FeatureExtractor(feature_config)
 
-    # Fetch and merge data from all symbols
-    all_X = []
-    all_y = []
-
-    for symbol in args.symbols:
-        logger.info("=== Processing %s ===", symbol)
-
-        if args.synthetic:
-            preset = SYNTHETIC_PRESETS.get(symbol, {})
-            candles = generate_synthetic_ohlcv(
-                symbol=symbol,
-                n_candles=args.n_candles,
-                start_price=preset.get("start_price", 1000.0),
-                drift=preset.get("drift", 0.0001),
-                vol=preset.get("vol", 0.002),
-                base_volume=preset.get("base_volume", 100.0),
-                seed=args.seed,
-            )
-        else:
-            raw_data = fetch_ohlcv(symbol, args.interval, args.days)
-            candles = raw_to_ohlcv(raw_data, symbol)
-
-        logger.info("Got %d candles for %s", len(candles), symbol)
-
-        X, y = build_dataset(candles, extractor, args.seq_len, args.forward_window)
-        all_X.append(X)
-        all_y.append(y)
-
-    # Per-symbol chronological split, then concatenate — avoids temporal leakage
-    # when training on multiple symbols
-    if args.walk_forward:
-        # Walk-forward: train 0-60%, val 60-80%, test 80-100%
-        X_trains, X_vals, X_tests = [], [], []
-        y_trains, y_vals, y_tests = [], [], []
-        for X_sym, y_sym in zip(all_X, all_y):
-            s1 = int(len(X_sym) * 0.6)
-            s2 = int(len(X_sym) * 0.8)
-            X_trains.append(X_sym[:s1])
-            X_vals.append(X_sym[s1:s2])
-            X_tests.append(X_sym[s2:])
-            y_trains.append(y_sym[:s1])
-            y_vals.append(y_sym[s1:s2])
-            y_tests.append(y_sym[s2:])
-        X_train = np.concatenate(X_trains)
-        X_val = np.concatenate(X_vals)
-        X_test = np.concatenate(X_tests)
-        y_train = np.concatenate(y_trains)
-        y_val = np.concatenate(y_vals)
-        y_test = np.concatenate(y_tests)
-        logger.info("Walk-forward split: Train=%d, Val=%d, Test=%d", len(X_train), len(X_val), len(X_test))
+    # ── Load or build dataset ──
+    if args.load_dataset:
+        logger.info("Loading pre-built dataset from %s", args.load_dataset)
+        t0 = time.time()
+        data = np.load(args.load_dataset)
+        X_train, y_train = data["X_train"], data["y_train"]
+        X_val, y_val = data["X_val"], data["y_val"]
+        logger.info("Loaded in %.1fs: Train=%d, Val=%d", time.time() - t0, len(X_train), len(X_val))
     else:
-        X_trains, X_vals = [], []
-        y_trains, y_vals = [], []
-        for X_sym, y_sym in zip(all_X, all_y):
-            split_idx = int(len(X_sym) * (1 - args.val_split))
-            X_trains.append(X_sym[:split_idx])
-            X_vals.append(X_sym[split_idx:])
-            y_trains.append(y_sym[:split_idx])
-            y_vals.append(y_sym[split_idx:])
-        X_train = np.concatenate(X_trains)
-        X_val = np.concatenate(X_vals)
-        y_train = np.concatenate(y_trains)
-        y_val = np.concatenate(y_vals)
+        # Build from raw data
+        all_X = []
+        all_y = []
+
+        if args.parquet_dir:
+            symbol_filter = args.symbols if args.symbols != ["BTC/USDT"] else None
+            symbol_candles = load_parquet_ohlcv(args.parquet_dir, symbols=symbol_filter)
+            for symbol, candles in symbol_candles.items():
+                logger.info("=== Processing %s (%d candles) ===", symbol, len(candles))
+                X, y = build_dataset(candles, extractor, args.seq_len, args.forward_window)
+                all_X.append(X)
+                all_y.append(y)
+        else:
+            for symbol in args.symbols:
+                logger.info("=== Processing %s ===", symbol)
+
+                if args.synthetic:
+                    preset = SYNTHETIC_PRESETS.get(symbol, {})
+                    candles = generate_synthetic_ohlcv(
+                        symbol=symbol,
+                        n_candles=args.n_candles,
+                        start_price=preset.get("start_price", 1000.0),
+                        drift=preset.get("drift", 0.0001),
+                        vol=preset.get("vol", 0.002),
+                        base_volume=preset.get("base_volume", 100.0),
+                        seed=args.seed,
+                    )
+                else:
+                    raw_data = fetch_ohlcv(symbol, args.interval, args.days)
+                    candles = raw_to_ohlcv(raw_data, symbol)
+
+                logger.info("Got %d candles for %s", len(candles), symbol)
+
+                X, y = build_dataset(candles, extractor, args.seq_len, args.forward_window)
+                all_X.append(X)
+                all_y.append(y)
+
+    # Per-symbol chronological split (skip if loaded from npz)
+    if not args.load_dataset:
+        if args.walk_forward:
+            X_trains, X_vals, X_tests = [], [], []
+            y_trains, y_vals, y_tests = [], [], []
+            for X_sym, y_sym in zip(all_X, all_y):
+                s1 = int(len(X_sym) * 0.6)
+                s2 = int(len(X_sym) * 0.8)
+                X_trains.append(X_sym[:s1])
+                X_vals.append(X_sym[s1:s2])
+                X_tests.append(X_sym[s2:])
+                y_trains.append(y_sym[:s1])
+                y_vals.append(y_sym[s1:s2])
+                y_tests.append(y_sym[s2:])
+            X_train = np.concatenate(X_trains)
+            X_val = np.concatenate(X_vals)
+            X_test = np.concatenate(X_tests)
+            y_train = np.concatenate(y_trains)
+            y_val = np.concatenate(y_vals)
+            y_test = np.concatenate(y_tests)
+            logger.info("Walk-forward split: Train=%d, Val=%d, Test=%d", len(X_train), len(X_val), len(X_test))
+        else:
+            X_trains, X_vals = [], []
+            y_trains, y_vals = [], []
+            for X_sym, y_sym in zip(all_X, all_y):
+                split_idx = int(len(X_sym) * (1 - args.val_split))
+                X_trains.append(X_sym[:split_idx])
+                X_vals.append(X_sym[split_idx:])
+                y_trains.append(y_sym[:split_idx])
+                y_vals.append(y_sym[split_idx:])
+            X_train = np.concatenate(X_trains)
+            X_val = np.concatenate(X_vals)
+            y_train = np.concatenate(y_trains)
+            y_val = np.concatenate(y_vals)
+
+        # Save dataset if requested
+        if args.save_dataset:
+            logger.info("Saving dataset to %s", args.save_dataset)
+            np.savez_compressed(args.save_dataset,
+                                X_train=X_train, y_train=y_train,
+                                X_val=X_val, y_val=y_val)
+            logger.info("Saved: Train=%d, Val=%d", len(X_train), len(X_val))
+            return
 
     logger.info("Train: %d samples, Val: %d samples", len(X_train), len(X_val))
 
@@ -795,6 +964,23 @@ def main():
         )
 
     # Train
+    # Build model architecture kwargs from CLI
+    model_kwargs = {}
+    if args.model_type == "lstm":
+        if args.hidden_size is not None:
+            model_kwargs["hidden_size"] = args.hidden_size
+        if args.num_layers is not None:
+            model_kwargs["num_layers"] = args.num_layers
+    elif args.model_type == "transformer":
+        if args.d_model is not None:
+            model_kwargs["d_model"] = args.d_model
+        if args.nhead is not None:
+            model_kwargs["nhead"] = args.nhead
+        if args.num_layers is not None:
+            model_kwargs["num_layers"] = args.num_layers
+        if args.d_ff is not None:
+            model_kwargs["d_ff"] = args.d_ff
+
     model = train_model(
         X_train, y_train, X_val, y_val,
         n_features=extractor.N_FEATURES,
@@ -805,6 +991,8 @@ def main():
         use_amp=args.amp,
         use_compile=getattr(args, "compile", False),
         sample_weights=sample_weights,
+        model_type=args.model_type,
+        model_kwargs=model_kwargs,
     )
 
     # Save PyTorch checkpoint

@@ -164,12 +164,14 @@ async def main(config: dict) -> None:
     alpha_cfg = config.get("alpha", {})
     engine_type = alpha_cfg.get("engine", "rule_based")
 
-    if engine_type in ("lstm", "ensemble"):
+    if engine_type in ("lstm", "transformer", "ensemble"):
         model_path = alpha_cfg.get("model_path", "")
+        model_type = alpha_cfg.get("model_type", "lstm")
         if model_path and Path(model_path).exists():
-            model = ModelWrapper(model_path, n_features=extractor.N_FEATURES)
+            model = ModelWrapper(model_path, n_features=extractor.N_FEATURES,
+                                 model_type=model_type)
             model.load()
-            logger.info("Loaded ML model from %s", model_path)
+            logger.info("Loaded %s model from %s", model_type, model_path)
         else:
             logger.warning("Model path '%s' not found, falling back to rule_based", model_path)
             config["alpha"]["engine"] = "rule_based"
@@ -255,7 +257,8 @@ async def main(config: dict) -> None:
         await order_manager.cancel_all()
         await monitor.stop()
         await feed.stop()
-        await supp_feed.stop()
+        if supp_feed is not None:
+            await supp_feed.stop()
 
         if mode == "roostoo" and isinstance(executor, RoostooExecutor):
             await executor.stop()

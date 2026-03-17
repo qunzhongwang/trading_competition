@@ -16,13 +16,15 @@ class ModelWrapper:
     PyTorch is the fallback.
     """
 
-    def __init__(self, model_path: str, n_features: int = 10, use_compile: bool = False):
+    def __init__(self, model_path: str, n_features: int = 10, use_compile: bool = False,
+                 model_type: str = "lstm"):
         self._model_path = model_path
         self._n_features = n_features
         self._use_compile = use_compile
+        self._model_type = model_type
         self._backend: Optional[str] = None  # "onnx" or "pytorch"
         self._session = None  # onnxruntime.InferenceSession
-        self._torch_model = None  # LSTMAlphaModel
+        self._torch_model = None  # LSTMAlphaModel or TransformerAlphaModel
 
     def load(self) -> None:
         if self._model_path.endswith(".onnx"):
@@ -45,9 +47,12 @@ class ModelWrapper:
     def _load_pytorch(self) -> None:
         import torch
 
-        from models.lstm_model import LSTMAlphaModel
-
-        model = LSTMAlphaModel(n_features=self._n_features)
+        if self._model_type == "transformer":
+            from models.transformer_model import TransformerAlphaModel
+            model = TransformerAlphaModel(n_features=self._n_features)
+        else:
+            from models.lstm_model import LSTMAlphaModel
+            model = LSTMAlphaModel(n_features=self._n_features)
         state_dict = torch.load(self._model_path, map_location="cpu", weights_only=True)
         model.load_state_dict(state_dict)
         model.eval()

@@ -51,13 +51,13 @@ class AlphaEngine:
         if self._engine_type == "rule_based":
             alpha = self._rule_based_score(features)
             source = "rule_based"
-        elif self._engine_type == "lstm":
-            alpha = self._lstm_score(candles, supplementary)
-            source = "lstm"
+        elif self._engine_type in ("lstm", "transformer"):
+            alpha = self._model_score(candles, supplementary)
+            source = self._engine_type
         elif self._engine_type == "ensemble":
             rule_alpha = self._rule_based_score(features)
-            lstm_alpha = self._lstm_score(candles, supplementary)
-            alpha = 0.5 * rule_alpha + 0.5 * lstm_alpha
+            model_alpha = self._model_score(candles, supplementary)
+            alpha = 0.5 * rule_alpha + 0.5 * model_alpha
             source = "ensemble"
         else:
             logger.warning("Unknown engine type '%s', falling back to rule_based", self._engine_type)
@@ -114,10 +114,10 @@ class AlphaEngine:
 
         return alpha
 
-    def _lstm_score(self, candles: List[OHLCV], supplementary: Optional[dict] = None) -> float:
-        """Run LSTM inference on feature sequence."""
+    def _model_score(self, candles: List[OHLCV], supplementary: Optional[dict] = None) -> float:
+        """Run neural model (LSTM or Transformer) inference on feature sequence."""
         if self._model is None or not self._model.is_loaded:
-            logger.warning("LSTM model not loaded, returning 0.0")
+            logger.warning("Model not loaded, returning 0.0")
             return 0.0
 
         seq = self._extractor.extract_sequence(candles, seq_len=self._seq_len, supplementary=supplementary)
