@@ -1,0 +1,1 @@
+python scripts/upload_model_to_hf.py --repo-id qunwang13/lstm-model --model-dir artifacts --force-safetensors

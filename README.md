@@ -137,6 +137,7 @@ All scripts live in `scripts/` with comments and configurable env vars:
 ./scripts/train.sh              # Train LSTM with synthetic data
 ./scripts/test.sh               # Run tests with coverage
 ./scripts/export_model.sh       # Export .pt → .onnx
+python scripts/upload_model_to_hf.py --repo-id USER/REPO  # Push artifacts to Hugging Face
 ./scripts/generate_data.sh      # Generate synthetic CSV data
 ```
 
@@ -240,6 +241,7 @@ trading-competition/
 │   ├── paper_trade.sh          # Quick paper trading session
 │   ├── train.sh / test.sh      # Training and testing
 │   ├── export_model.sh         # .pt → .onnx export
+│   ├── upload_model_to_hf.py   # Push model.pt / .onnx to Hugging Face Hub
 │   └── generate_data.sh        # Synthetic CSV data generation
 ├── core/
 │   └── models.py               # Pydantic models (Tick, OHLCV, Signal, Order, Position, RiskMetrics)
