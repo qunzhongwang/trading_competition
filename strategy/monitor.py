@@ -83,7 +83,7 @@ class StrategyMonitor:
 
         # Time-based periodic logging (wall clock, not iteration count)
         self._last_status_log: float = 0.0
-        self._status_log_interval: float = 300.0  # 5 minutes
+        self._status_log_interval: float = 60.0  # 1 minute
 
         # ICIR tracking: store previous factors per symbol for online learning
         self._prev_factors: Dict[str, list] = {}
