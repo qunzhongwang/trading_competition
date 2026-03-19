@@ -152,7 +152,7 @@ CONFIG=config/fast.yaml ./scripts/paper_trade.sh # Custom config
 ## Testing
 
 ```bash
-# Run all tests (203 tests, ~12s)
+# Run all tests (210 tests, ~12s)
 pytest
 
 # Single file or test
