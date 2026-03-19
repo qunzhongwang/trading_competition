@@ -507,6 +507,16 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
+    # Load .env file if present (so credentials work without shell scripts)
+    env_path = Path(".env")
+    if env_path.exists():
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    key, _, value = line.partition("=")
+                    os.environ.setdefault(key.strip(), value.strip())
+
     config = load_config(args.config)
     if args.mode:
         config["mode"] = args.mode
