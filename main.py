@@ -303,6 +303,7 @@ async def main(config: dict) -> None:
 
     # NAV snapshot interval for risk metrics (every 60 iterations ~= 1 hour at 1m candles)
     NAV_SNAPSHOT_INTERVAL = 60  # noqa: F841
+
     METRICS_LOG_INTERVAL = 120
 
     async def run_with_shutdown():

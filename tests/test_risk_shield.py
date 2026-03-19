@@ -1,6 +1,5 @@
 """Tests for risk/risk_shield.py — pre-trade validation, stops, circuit breaker."""
 
-
 import pytest
 
 from core.models import Order, OrderType, Side, StrategyState
