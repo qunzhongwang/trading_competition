@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from collections import deque
+from datetime import datetime
+from typing import Dict, List, Optional
 
 from core.models import (
     Order,
@@ -19,7 +21,7 @@ class StrategyLogic:
     """Per-symbol state machine for the long-only strategy.
 
     State transitions:
-        FLAT + alpha > entry_threshold → emit BUY → LONG_PENDING
+        FLAT + alpha > entry_threshold (confirmed N bars) → emit BUY → LONG_PENDING
         LONG_PENDING + fill → HOLDING
         LONG_PENDING + cancel/reject → FLAT
         HOLDING + alpha < exit_threshold → emit SELL → FLAT
@@ -46,6 +48,21 @@ class StrategyLogic:
         exec_cfg = config.get("execution", {})
         self._limit_offset_bps: float = exec_cfg.get("limit_offset_bps", 5)
 
+        # Signal confirmation: require N consecutive bars above entry threshold
+        self._confirmation_bars: int = strategy_cfg.get("confirmation_bars", 2)
+        self._alpha_history: deque = deque(maxlen=max(self._confirmation_bars, 1))
+
+        # Graduated exit tiers
+        self._exit_tiers: List[Dict] = strategy_cfg.get("exit_tiers", [])
+        self._exit_tier_reached: int = 0
+        self._initial_hold_qty: float = 0.0
+
+        # Optional TradeTracker for adaptive Kelly (injected after init)
+        self._trade_tracker = None
+
+        # Alpha decay
+        self._decay_half_life_s: float = alpha_cfg.get("decay_half_life_s", 999999)
+
     @property
     def state(self) -> StrategyState:
         return self._state
@@ -65,7 +82,15 @@ class StrategyLogic:
         Returns an Order if action is needed, None otherwise.
         """
         if self._state == StrategyState.FLAT:
-            if signal.alpha_score > self._entry_threshold:
+            # Use decayed alpha for threshold comparison (disabled if half_life >= 999999)
+            if self._decay_half_life_s < 999999:
+                effective_alpha = signal.decayed_alpha(datetime.utcnow(), self._decay_half_life_s)
+            else:
+                effective_alpha = signal.alpha_score
+            # Always append effective alpha to history for confirmation tracking
+            self._alpha_history.append(effective_alpha)
+
+            if self._confirmed_entry():
                 qty = self._compute_buy_quantity(portfolio, current_price, signal.alpha_score)
                 if qty <= 0:
                     return None
@@ -81,9 +106,10 @@ class StrategyLogic:
                     order_type_label = "LIMIT"
 
                 self._state = StrategyState.LONG_PENDING
+                self._alpha_history.clear()
                 logger.info(
-                    "[%s] FLAT → LONG_PENDING: alpha=%.3f > %.3f, qty=%.6f, order=%s",
-                    self._symbol, signal.alpha_score, self._entry_threshold, qty, order_type_label,
+                    "[%s] FLAT → LONG_PENDING: alpha=%.3f (confirmed %d bars), qty=%.6f, order=%s",
+                    self._symbol, signal.alpha_score, self._confirmation_bars, qty, order_type_label,
                 )
                 order = Order(
                     symbol=self._symbol,
@@ -96,33 +122,89 @@ class StrategyLogic:
                 return order
 
         elif self._state == StrategyState.HOLDING:
-            if signal.alpha_score < self._exit_threshold:
-                # Find current position quantity
-                pos_qty = 0.0
-                for pos in portfolio.positions:
-                    if pos.symbol == self._symbol:
-                        pos_qty = pos.quantity
-                        break
-
-                if pos_qty <= 0:
-                    self._state = StrategyState.FLAT
-                    return None
-
-                logger.info(
-                    "[%s] HOLDING → FLAT: alpha=%.3f < %.3f, selling %.6f",
-                    self._symbol, signal.alpha_score, self._exit_threshold, pos_qty,
-                )
-                self._state = StrategyState.FLAT
-                return Order(
-                    symbol=self._symbol,
-                    side=Side.SELL,
-                    order_type=OrderType.MARKET,
-                    quantity=pos_qty,
-                )
+            # Graduated exits: check tiers first, then fallback to single threshold
+            exit_order = self._check_graduated_exit(signal, portfolio)
+            if exit_order is not None:
+                return exit_order
 
         elif self._state == StrategyState.LONG_PENDING:
             # Waiting for fill — no action
             pass
+
+        return None
+
+    def _confirmed_entry(self) -> bool:
+        """Check if we have N consecutive bars above entry threshold."""
+        if len(self._alpha_history) < self._confirmation_bars:
+            return False
+        return all(a > self._entry_threshold for a in self._alpha_history)
+
+    def _check_graduated_exit(self, signal: Signal, portfolio: PortfolioSnapshot) -> Optional[Order]:
+        """Handle exit logic with optional graduated tiers."""
+        # Use decayed alpha for exit threshold comparison (disabled if half_life >= 999999)
+        if self._decay_half_life_s < 999999:
+            effective_alpha = signal.decayed_alpha(datetime.utcnow(), self._decay_half_life_s)
+        else:
+            effective_alpha = signal.alpha_score
+
+        pos_qty = 0.0
+        for pos in portfolio.positions:
+            if pos.symbol == self._symbol:
+                pos_qty = pos.quantity
+                break
+
+        if pos_qty <= 0:
+            self._state = StrategyState.FLAT
+            self._exit_tier_reached = 0
+            self._initial_hold_qty = 0.0
+            return None
+
+        # Graduated exit tiers
+        if self._exit_tiers:
+            for i, tier in enumerate(self._exit_tiers):
+                if i <= self._exit_tier_reached - 1:
+                    continue  # already triggered this tier
+                if effective_alpha < tier["threshold"]:
+                    sell_pct = tier["sell_pct"]
+                    sell_qty = pos_qty * sell_pct if sell_pct < 1.0 else pos_qty
+                    sell_qty = min(sell_qty, pos_qty)
+                    self._exit_tier_reached = i + 1
+
+                    if sell_pct >= 1.0 or sell_qty >= pos_qty - 1e-12:
+                        self._state = StrategyState.FLAT
+                        self._exit_tier_reached = 0
+                        self._initial_hold_qty = 0.0
+                        logger.info(
+                            "[%s] HOLDING → FLAT: alpha=%.3f < tier %d (%.2f), selling all %.6f",
+                            self._symbol, signal.alpha_score, i, tier["threshold"], sell_qty,
+                        )
+                    else:
+                        logger.info(
+                            "[%s] HOLDING partial exit: alpha=%.3f < tier %d (%.2f), selling %.1f%% = %.6f",
+                            self._symbol, signal.alpha_score, i, tier["threshold"], sell_pct * 100, sell_qty,
+                        )
+
+                    return Order(
+                        symbol=self._symbol,
+                        side=Side.SELL,
+                        order_type=OrderType.MARKET,
+                        quantity=sell_qty,
+                    )
+            return None
+
+        # Fallback: single exit threshold
+        if effective_alpha < self._exit_threshold:
+            logger.info(
+                "[%s] HOLDING → FLAT: alpha=%.3f < %.3f, selling %.6f",
+                self._symbol, signal.alpha_score, self._exit_threshold, pos_qty,
+            )
+            self._state = StrategyState.FLAT
+            return Order(
+                symbol=self._symbol,
+                side=Side.SELL,
+                order_type=OrderType.MARKET,
+                quantity=pos_qty,
+            )
 
         return None
 
@@ -133,6 +215,8 @@ class StrategyLogic:
 
         if order.side == Side.BUY and self._state == StrategyState.LONG_PENDING:
             self._state = StrategyState.HOLDING
+            self._exit_tier_reached = 0
+            self._initial_hold_qty = order.filled_quantity or order.quantity
             logger.info("[%s] LONG_PENDING → HOLDING (filled @ %.2f)", self._symbol, order.filled_price)
 
         elif order.side == Side.SELL:
@@ -151,14 +235,28 @@ class StrategyLogic:
     def force_flat(self) -> None:
         """Force state to FLAT (used by circuit breaker)."""
         self._state = StrategyState.FLAT
+        self._alpha_history.clear()
+        self._exit_tier_reached = 0
+        self._initial_hold_qty = 0.0
+
+    def set_trade_tracker(self, tracker) -> None:
+        """Inject TradeTracker for adaptive Kelly sizing."""
+        self._trade_tracker = tracker
 
     def _compute_buy_quantity(self, portfolio: PortfolioSnapshot, current_price: float, alpha_score: float) -> float:
         """Compute buy quantity using Half-Kelly position sizing."""
         if portfolio.cash <= 0 or current_price <= 0:
             return 0.0
 
+        # Use adaptive Kelly params if available, else static priors
+        if self._trade_tracker is not None:
+            win_rate, payoff_ratio = self._trade_tracker.get_kelly_params()
+        else:
+            win_rate = self._win_rate
+            payoff_ratio = self._payoff_ratio
+
         # Half-Kelly scaling
-        raw_kelly = self._win_rate - (1 - self._win_rate) / self._payoff_ratio
+        raw_kelly = win_rate - (1 - win_rate) / payoff_ratio
         alpha_intensity = (alpha_score - self._entry_threshold) / (1.0 - self._entry_threshold)
         alpha_intensity = max(0.0, min(1.0, alpha_intensity))
 

@@ -139,6 +139,7 @@ def default_config() -> dict:
         "strategy": {
             "max_positions_per_symbol": 1,
             "position_size_pct": 0.10,
+            "confirmation_bars": 1,
         },
         "risk": {
             "max_portfolio_exposure": 0.50,
@@ -236,6 +237,6 @@ def make_signal(
         symbol=symbol,
         alpha_score=alpha,
         confidence=abs(alpha),
-        timestamp=datetime(2025, 1, 1),
+        timestamp=datetime.utcnow(),
         source=source,
     )

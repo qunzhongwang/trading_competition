@@ -138,7 +138,7 @@ class TestPositionSizing:
         """When cash is low, allocation is limited."""
         config = {
             "alpha": {"entry_threshold": 0.6, "exit_threshold": -0.2},
-            "strategy": {"position_size_pct": 0.50},  # 50% of NAV
+            "strategy": {"position_size_pct": 0.50, "confirmation_bars": 1},
         }
         logic = StrategyLogic("BTC/USDT", config)
         snap = PortfolioSnapshot(

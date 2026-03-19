@@ -68,24 +68,32 @@ class FeatureExtractor:
         )
 
     def extract_sequence(self, candles: List[OHLCV], seq_len: int = 30,
-                         supplementary: Optional[dict] = None) -> np.ndarray:
+                         supplementary: Optional[dict] = None,
+                         supplementary_history: Optional[dict] = None) -> np.ndarray:
         """Extract a (seq_len, n_features) normalized array for LSTM input.
 
         Delegates to the vectorized implementation for performance.
         Falls back to the iterative method on error.
         """
         try:
-            return self.extract_sequence_vectorized(candles, seq_len, supplementary)
+            return self.extract_sequence_vectorized(candles, seq_len, supplementary,
+                                                    supplementary_history=supplementary_history)
         except Exception as e:
             logger.warning("Vectorized extraction failed (%s), falling back to iterative", e)
-            return self._extract_sequence_iterative(candles, seq_len, supplementary)
+            return self._extract_sequence_iterative(candles, seq_len, supplementary,
+                                                    supplementary_history=supplementary_history)
 
     def _extract_sequence_iterative(self, candles: List[OHLCV], seq_len: int = 30,
-                                    supplementary: Optional[dict] = None) -> np.ndarray:
+                                    supplementary: Optional[dict] = None,
+                                    supplementary_history: Optional[dict] = None) -> np.ndarray:
         """Original iterative extraction (fallback)."""
         total_needed = self.min_candles + seq_len
         if len(candles) < total_needed:
             return np.zeros((seq_len, self.N_FEATURES), dtype=np.float32)
+
+        # Build per-timestep supplementary arrays from history
+        obi_seq, funding_seq, taker_seq = self._resolve_supplementary_history(
+            supplementary, supplementary_history, seq_len)
 
         features = []
         for i in range(seq_len):
@@ -95,8 +103,8 @@ class FeatureExtractor:
             features.append([
                 fv.rsi, fv.ema_fast, fv.ema_slow,
                 fv.atr, fv.momentum, fv.volatility,
-                fv.order_book_imbalance, fv.volume_ratio,
-                fv.funding_rate, fv.taker_ratio,
+                obi_seq[i], fv.volume_ratio,
+                funding_seq[i], taker_seq[i],
             ])
 
         arr = np.array(features, dtype=np.float32)
@@ -107,7 +115,8 @@ class FeatureExtractor:
         return arr
 
     def extract_sequence_vectorized(self, candles: List[OHLCV], seq_len: int = 30,
-                                    supplementary: Optional[dict] = None) -> np.ndarray:
+                                    supplementary: Optional[dict] = None,
+                                    supplementary_history: Optional[dict] = None) -> np.ndarray:
         """Vectorized extraction: compute all features in single numpy passes, then slice.
 
         ~60x faster than iterative for seq_len=60 since each indicator is computed once
@@ -137,11 +146,9 @@ class FeatureExtractor:
         # Volume ratio array
         volume_ratio_arr = self._vectorized_volume_ratio(volumes, window=24)
 
-        # Supplementary (constant across sequence)
-        supp = supplementary or {}
-        obi = supp.get("order_book_imbalance", 0.0)
-        funding = supp.get("funding_rate", 0.0)
-        taker = supp.get("taker_ratio", 0.0)
+        # Supplementary: use per-timestep history if available, else constant
+        obi_seq, funding_seq, taker_seq = self._resolve_supplementary_history(
+            supplementary, supplementary_history, seq_len)
 
         # Stack: take last seq_len values from each array
         # All arrays are length n; we take indices [n-seq_len : n]
@@ -153,10 +160,10 @@ class FeatureExtractor:
             atr_arr[sl],
             momentum_arr[sl],
             volatility_arr[sl],
-            np.full(seq_len, obi),
+            np.array(obi_seq, dtype=np.float32),
             volume_ratio_arr[sl],
-            np.full(seq_len, funding),
-            np.full(seq_len, taker),
+            np.array(funding_seq, dtype=np.float32),
+            np.array(taker_seq, dtype=np.float32),
         ]).astype(np.float32)
 
         # Z-score normalize
@@ -165,6 +172,37 @@ class FeatureExtractor:
         std = np.where(std < 1e-8, 1.0, std)
         seq = (seq - mean) / std
         return seq
+
+    @staticmethod
+    def _resolve_supplementary_history(
+        supplementary: Optional[dict],
+        supplementary_history: Optional[dict],
+        seq_len: int,
+    ) -> tuple:
+        """Return (obi_seq, funding_seq, taker_seq) lists of length seq_len.
+
+        If history is provided and long enough, use per-timestep values.
+        If history is shorter than seq_len, pad the beginning with the earliest value.
+        If no history, fall back to broadcasting the scalar from supplementary.
+        """
+        supp = supplementary or {}
+        hist = supplementary_history or {}
+
+        def _resolve(hist_key: str, scalar_key: str) -> list:
+            values = hist.get(hist_key, [])
+            if values:
+                if len(values) >= seq_len:
+                    return list(values[-seq_len:])
+                # Pad beginning with earliest available value
+                pad_val = values[0]
+                return [pad_val] * (seq_len - len(values)) + list(values)
+            # No history — broadcast scalar
+            return [supp.get(scalar_key, 0.0)] * seq_len
+
+        obi_seq = _resolve("order_book_imbalance", "order_book_imbalance")
+        funding_seq = _resolve("funding_rate", "funding_rate")
+        taker_seq = _resolve("taker_ratio", "taker_ratio")
+        return obi_seq, funding_seq, taker_seq
 
     @staticmethod
     def _vectorized_rsi(closes: np.ndarray, period: int) -> np.ndarray:

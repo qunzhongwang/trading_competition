@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import uuid
 from datetime import datetime
 from enum import Enum
@@ -74,6 +75,18 @@ class Signal(BaseModel):
     confidence: float = 1.0  # [0.0, 1.0]
     timestamp: datetime
     source: str = "rule_based"  # "rule_based" | "lstm" | "ensemble"
+
+    def decayed_alpha(self, now: datetime, half_life_s: float = 150.0) -> float:
+        """Return alpha score with exponential time decay.
+
+        decay = 2^(-age_s / half_life_s)
+        Set half_life_s to a very large value (999999) to effectively disable.
+        """
+        age_s = (now - self.timestamp).total_seconds()
+        if age_s <= 0 or half_life_s <= 0:
+            return self.alpha_score
+        decay = math.pow(2.0, -age_s / half_life_s)
+        return self.alpha_score * decay
 
 
 class Order(BaseModel):

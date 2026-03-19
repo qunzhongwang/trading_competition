@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta
 from typing import Callable, Dict, List
 
 from core.models import Order, OrderStatus
@@ -13,11 +14,13 @@ logger = logging.getLogger(__name__)
 class OrderManager:
     """Manages order lifecycle: submit, track, cancel, and notify on fills."""
 
-    def __init__(self, executor: BaseExecutor, tracker: PortfolioTracker):
+    def __init__(self, executor: BaseExecutor, tracker: PortfolioTracker,
+                 timeout_seconds: float = 0):
         self._executor = executor
         self._tracker = tracker
         self._active_orders: Dict[str, Order] = {}
         self._fill_callbacks: List[Callable[[Order], None]] = []
+        self._timeout_seconds = timeout_seconds
 
     async def submit(self, order: Order) -> Order:
         """Submit order to executor and handle the result."""
@@ -56,8 +59,24 @@ class OrderManager:
                 logger.error("Callback error on cancel: %s", e)
 
     async def check_pending(self) -> None:
-        """Check and update status of pending orders."""
+        """Check and update status of pending orders. Cancel stale orders."""
+        now = datetime.utcnow()
         to_remove = []
+        to_cancel = []
+
+        # Check for timed-out orders first
+        if self._timeout_seconds > 0:
+            for order_id, order in self._active_orders.items():
+                age = (now - order.created_at).total_seconds()
+                if age > self._timeout_seconds:
+                    to_cancel.append(order_id)
+                    logger.info(
+                        "Order %s timed out after %.0fs (limit: %.0fs), cancelling",
+                        order_id, age, self._timeout_seconds,
+                    )
+
+        for order_id in to_cancel:
+            await self.cancel(order_id)
 
         for order_id, order in self._active_orders.items():
             try:

@@ -26,8 +26,14 @@ class LiveBuffer:
         self._depth_data: Dict[str, dict] = {}  # latest order book imbalance per symbol
         self._funding_data: Dict[str, float] = {}  # latest funding rate per symbol
         self._taker_data: Dict[str, float] = {}  # latest taker ratio per symbol
+        # Per-candle supplementary history (mirrors candle deque size)
+        self._obi_history: Dict[str, deque] = {}
+        self._funding_history: Dict[str, deque] = {}
+        self._taker_history: Dict[str, deque] = {}
         self._lock = asyncio.Lock()
         self._event = asyncio.Event()
+        # Resampled candle storage: {minutes: {symbol: deque[OHLCV]}}
+        self._resampled: Dict[int, Dict[str, deque]] = {}
 
     async def push_tick(self, tick: Tick) -> None:
         async with self._lock:
@@ -86,16 +92,25 @@ class LiveBuffer:
             ask_volume = sum(float(a[1]) for a in asks[:10]) if asks else 0.0
             imbalance = bid_volume / ask_volume if ask_volume > 1e-10 else 1.0
             self._depth_data[symbol] = {"order_book_imbalance": imbalance}
+            if symbol not in self._obi_history:
+                self._obi_history[symbol] = deque(maxlen=self._max_candles)
+            self._obi_history[symbol].append(imbalance)
 
     async def push_funding(self, symbol: str, rate: float) -> None:
         """Store latest funding rate."""
         async with self._lock:
             self._funding_data[symbol] = rate
+            if symbol not in self._funding_history:
+                self._funding_history[symbol] = deque(maxlen=self._max_candles)
+            self._funding_history[symbol].append(rate)
 
     async def push_taker_ratio(self, symbol: str, ratio: float) -> None:
         """Store latest taker buy/sell ratio."""
         async with self._lock:
             self._taker_data[symbol] = ratio
+            if symbol not in self._taker_history:
+                self._taker_history[symbol] = deque(maxlen=self._max_candles)
+            self._taker_history[symbol].append(ratio)
 
     async def get_supplementary(self, symbol: str) -> dict:
         """Get all supplementary data for a symbol."""
@@ -106,6 +121,35 @@ class LiveBuffer:
                 "funding_rate": self._funding_data.get(symbol, 0.0),
                 "taker_ratio": self._taker_data.get(symbol, 0.0),
             }
+
+    async def get_supplementary_history(self, symbol: str, n: int) -> dict:
+        """Get last n values of each supplementary feature as lists."""
+        async with self._lock:
+            obi = list(self._obi_history.get(symbol, deque()))[-n:]
+            funding = list(self._funding_history.get(symbol, deque()))[-n:]
+            taker = list(self._taker_history.get(symbol, deque()))[-n:]
+            return {
+                "order_book_imbalance": obi,
+                "funding_rate": funding,
+                "taker_ratio": taker,
+            }
+
+    async def push_resampled(self, minutes: int, candle: OHLCV) -> None:
+        """Store a completed resampled candle (e.g. 15m or 1h bar)."""
+        async with self._lock:
+            if minutes not in self._resampled:
+                self._resampled[minutes] = {}
+            if candle.symbol not in self._resampled[minutes]:
+                self._resampled[minutes][candle.symbol] = deque(maxlen=self._max_candles)
+            self._resampled[minutes][candle.symbol].append(candle)
+
+    async def get_resampled_candles(self, symbol: str, minutes: int, n: int = 50) -> List[OHLCV]:
+        """Return last n resampled candles for a symbol at given timeframe."""
+        async with self._lock:
+            buf = self._resampled.get(minutes, {}).get(symbol, deque())
+            if n <= 0 or n >= len(buf):
+                return list(buf)
+            return list(buf)[-n:]
 
     def candle_count(self, symbol: str) -> int:
         return len(self._candles.get(symbol, deque()))

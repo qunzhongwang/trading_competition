@@ -152,7 +152,7 @@ CONFIG=config/fast.yaml ./scripts/paper_trade.sh # Custom config
 ## Testing
 
 ```bash
-# Run all tests (157 tests, ~12s)
+# Run all tests (203 tests, ~12s)
 pytest
 
 # Single file or test
@@ -163,7 +163,7 @@ pytest tests/test_features.py::TestRSI::test_all_gains
 pytest --cov=. --cov-report=term-missing
 ```
 
-Test modules cover: Pydantic models, feature extraction (RSI/EMA/ATR/momentum/vol), portfolio tracker (cash/PnL/NAV/exposure), strategy state machine, risk shield (stops/circuit breaker/rate limit/exposure caps), alpha engine (rule-based/ensemble), async buffer, sim executor (market/limit fills), order manager lifecycle, simulated feed (GBM/CSV replay), training pipeline (dataset building/synthetic generation), integration (full pipeline end-to-end), and config loading.
+Test modules cover: Pydantic models, feature extraction (RSI/EMA/ATR/momentum/vol), portfolio tracker (cash/PnL/NAV/exposure), strategy state machine, risk shield (stops/circuit breaker/rate limit/exposure caps), alpha engine (rule-based/ensemble), async buffer, sim executor (market/limit fills), order manager lifecycle, simulated feed (GBM/CSV replay), training pipeline (dataset building/synthetic generation), integration (full pipeline end-to-end), config loading, signal confirmation, multi-timeframe resampling, ICIR tracker, trade tracker, graduated exits, and alpha decay.
 
 ## Architecture
 
@@ -178,10 +178,14 @@ Test modules cover: Pydantic models, feature extraction (RSI/EMA/ATR/momentum/vo
         ▼                │    Taker Buy/Sell Ratio (aggressor flow)         │
    [LiveBuffer]          │    Order Book Imbalance (microstructure)         │
         │                │    Volume Ratio                                  │
-  event.set()            └──────────────┬───────────────────────────────────┘
+  event.set()            │                                                  │
+        │                │  + Multi-Timeframe (15m, 1h):                   │
+        ▼                │    15m EMA crossover → trend filter              │
+  [StrategyMonitor]      │    1h momentum(10) → regime filter               │
+        │                └──────────────┬───────────────────────────────────┘
         │                               │
-        ▼                               ▼
-  [StrategyMonitor]      ┌──────────────────────────────────┐
+        │                               ▼
+        │                ┌──────────────────────────────────┐
         │                │  LSTM Regression Head              │
         │                │  Input:  (batch, 60, 10)           │
         │                │  Output: Tanh → alpha ∈ [-1, 1]    │
@@ -191,15 +195,20 @@ Test modules cover: Pydantic models, feature extraction (RSI/EMA/ATR/momentum/vo
         ├───────────────────────────────┘
         ▼
    AlphaEngine ──> Signal {alpha ∈ [-1, 1]}
+        │               │
+        │          Multi-TF filter (dampen/boost)
+        │          Per-symbol ICIR weights (Bayesian shrinkage)
+        │          Alpha decay (configurable half-life)
         │
         ▼
    StrategyLogic ──────────> RiskShield ──────────> OrderManager ──> Executor
-   (Half-Kelly sizing)       (dynamic ATR stop,      (market if α > 0.85,
-                              trailing stop,           limit if α ∈ [0.6, 0.85])
-                              circuit breaker)                    │
-                                                    PortfolioTracker.on_fill()
-                                                    TradeLogger (JSONL)
-                                                    RiskMetrics (Sortino/Sharpe/Calmar)
+   (Signal confirmation,     (dynamic ATR stop,      (market if α > 0.85,
+    Half-Kelly sizing,        trailing stop,           limit if α ∈ [0.6, 0.85],
+    Graduated exit tiers,     circuit breaker)          order timeout 30s)
+    Adaptive Kelly)                                             │
+                                                   PortfolioTracker.on_fill()
+                                                   TradeLogger (JSONL)
+                                                   RiskMetrics (Sortino/Sharpe/Calmar)
 ```
 
 **Executors:**
@@ -213,18 +222,18 @@ Test modules cover: Pydantic models, feature extraction (RSI/EMA/ATR/momentum/vo
 
 2. **Event-driven, not polling.** The data feed pushes candles into a `LiveBuffer`. The `StrategyMonitor` blocks on `asyncio.Event` until a new closed candle arrives — zero CPU waste between events.
 
-3. **Multi-scale inputs (planned).** A future upgrade will resample 1m candles into 15-minute and 1-hour bars, extracting trend-level EMA crossovers and momentum from each timeframe to combat microstructure noise.
+3. **Multi-scale inputs.** The `MultiResampler` resamples 1m candles into 15-minute and 1-hour bars, extracting trend-level EMA crossovers and momentum from each timeframe to filter out microstructure noise. Higher-TF signals dampen or boost the rule-based alpha without affecting the LSTM path.
 
 ### Feature Summary
 
 | Category | Features | Timeframe | Source |
 |----------|----------|-----------|--------|
 | Price-derived | RSI(14), EMA(12/26), ATR(14), Momentum(10), Volatility(20) | 1m | Candles |
-| Web3 sentiment | Funding rate | Real-time | Binance Futures WS |
-| Order flow | Taker buy/sell ratio | 5m | Binance REST |
-| Microstructure | Order book imbalance, Volume ratio | 100ms / per candle | Binance Depth WS |
+| Web3 sentiment | Funding rate | Real-time (per-candle history) | Binance Futures WS |
+| Order flow | Taker buy/sell ratio | 5m (per-candle history) | Binance REST |
+| Microstructure | Order book imbalance, Volume ratio | 100ms / per candle (per-candle history) | Binance Depth WS |
 
-All supplementary endpoints are free, require no API key, and fail gracefully (features default to neutral values on timeout).
+All supplementary endpoints are free, require no API key, and fail gracefully (features default to neutral values on timeout). Supplementary features (funding rate, taker ratio, order book imbalance) are stored as per-candle time series in `LiveBuffer`, providing natural variation for LSTM z-score normalization at inference time.
 
 ## Project Structure
 
@@ -246,9 +255,10 @@ trading-competition/
 ├── core/
 │   └── models.py               # Pydantic models (Tick, OHLCV, Signal, Order, Position, RiskMetrics)
 ├── data/
-│   ├── buffer.py               # asyncio.Event-driven sliding window for candles + supplementary data
+│   ├── buffer.py               # asyncio.Event-driven sliding window for candles + supplementary + resampled data
 │   ├── connector.py            # Binance WebSocket connector (live) + BinanceSupplementaryFeed
 │   ├── sim_feed.py             # Synthetic GBM candle generator (paper mode)
+│   ├── resampler.py            # CandleResampler (1m→Nm) + MultiResampler (multi-timeframe)
 │   ├── roostoo_auth.py         # HMAC SHA256 authentication for Roostoo API
 │   └── historical/             # Cached CSV from ccxt (auto-created by training script)
 ├── features/
@@ -256,11 +266,13 @@ trading-competition/
 ├── models/
 │   ├── lstm_model.py           # PyTorch LSTM architecture (2-layer, 128 hidden, tanh regression head)
 │   ├── model_wrapper.py        # Loads .onnx or .pt model for inference
-│   ├── inference.py            # AlphaEngine: rule-based / lstm / ensemble scoring
+│   ├── inference.py            # AlphaEngine: rule-based / lstm / ensemble scoring + multi-TF filter
+│   ├── icir_tracker.py         # Per-symbol Bayesian ICIR tracker with online shrinkage
 │   └── train.py                # Offline training (walk-forward validation, recency weighting)
 ├── strategy/
-│   ├── logic.py                # Per-symbol state machine + Half-Kelly sizing + alpha-driven order routing
-│   └── monitor.py              # Central event loop / orchestrator
+│   ├── logic.py                # Per-symbol state machine + signal confirmation + graduated exits
+│   ├── monitor.py              # Central event loop / orchestrator (multi-TF, ICIR, adaptive Kelly)
+│   └── trade_tracker.py        # Rolling trade outcomes for adaptive Kelly sizing
 ├── risk/
 │   ├── risk_shield.py          # Pre-trade validation, dynamic ATR stop, trailing stop, circuit breaker
 │   └── tracker.py              # Real-time PnL, positions, NAV, Sortino/Sharpe/Calmar computation
@@ -268,7 +280,7 @@ trading-competition/
 │   ├── executor.py             # BaseExecutor ABC + LiveExecutor (ccxt)
 │   ├── roostoo_executor.py     # RoostooExecutor — REST API with HMAC auth, symbol mapping
 │   ├── sim_executor.py         # Paper trading executor (instant fills + slippage)
-│   ├── order_manager.py        # Order lifecycle, fill callbacks
+│   ├── order_manager.py        # Order lifecycle, fill callbacks, timeout cancellation
 │   └── trade_logger.py         # Structured JSONL trade/signal/API event logging
 ├── docker/
 │   └── Dockerfile              # Multi-stage build (Python 3.11, CPU torch)
@@ -414,15 +426,18 @@ alpha:
 
 ## Design Decisions
 
-### Why multi-scale features? (planned)
+### Multi-scale features
 
-1-minute candles in crypto are dominated by microstructure noise — bid-ask bounce, random fills, latency jitter. A planned upgrade will resample candles into 15-minute and 1-hour bars and extract trend indicators (EMA crossover, momentum) at each scale:
+1-minute candles in crypto are dominated by microstructure noise — bid-ask bounce, random fills, latency jitter. The `MultiResampler` resamples candles into 15-minute and 1-hour bars and extracts trend indicators (EMA crossover, momentum) at each scale:
 
 - **1m features** capture short-term mean-reversion and volatility spikes
-- **15m features** would capture intraday trend direction and momentum
-- **1h features** would capture session-level regime (trending vs. ranging)
+- **15m EMA(12)/EMA(26) crossover** captures intraday trend direction
+- **1h momentum(10)** captures session-level regime (trending vs. ranging)
 
-The LSTM would receive all scales concatenated, letting it learn cross-frequency interactions (e.g., "1m RSI oversold + 1h trend bullish" → high-confidence long).
+The multi-TF filter dampens or boosts the rule-based alpha score:
+- Bearish higher-TF context (filter < 0) dampens bullish alpha: `alpha *= max(0, 1 + filter)`
+- Bullish higher-TF context (filter > 0) slightly boosts alpha: `alpha *= min(1.5, 1 + 0.2 * filter)`
+- LSTM path is unchanged — multi-TF filtering only applies to rule-based and ensemble modes
 
 ### Why regression output (with planned classification upgrade)?
 
@@ -455,12 +470,14 @@ Competition constraint. The state machine only has three states: `FLAT` (no posi
 
 For a 10-day competition, you need signals you can debug and tune in real-time. The rule-based engine combines four indicators into a composite score:
 
-| Component | Weight | Logic |
+| Component | Default Weight | Logic |
 |-----------|--------|-------|
 | RSI | 0.3 | Oversold (RSI < 30) = bullish, overbought (RSI > 70) = bearish |
 | Momentum | 0.3 | Rate of change over 10 candles, normalized |
 | EMA Crossover | 0.3 | (EMA12 - EMA26) / EMA26, scaled |
 | Volatility | 0.1 | Penalty — high vol reduces conviction |
+
+**Per-symbol adaptive weights (ICIR):** When enabled, the `BayesianICIRTracker` replaces these default weights with per-symbol Bayesian-shrunk weights. Offline priors are loaded from `artifacts/icir_priors.json`; during the competition, Bayesian shrinkage (`λ = min_lambda + (1-min_lambda) × e^(-n/τ)`) continuously adapts toward online IC observations while always retaining 30% of the prior.
 
 The LSTM model can be trained offline and swapped in via one config change (`alpha.engine: "lstm"` or `"ensemble"` for 50/50 average).
 
@@ -491,7 +508,7 @@ Feature extraction runs on every candle. Pure numpy on small arrays (50-500 floa
 
 ### Signal → Order Routing
 
-The strategy routes orders based on alpha strength to optimize the fee/urgency tradeoff:
+The strategy routes orders based on alpha strength to optimize the fee/urgency tradeoff. **Signal confirmation** requires N consecutive bars (default 2) above the entry threshold before emitting a buy order — this filters out single-bar noise spikes.
 
 | Alpha Range | Order Type | Fee | Rationale |
 |-------------|-----------|-----|-----------|
@@ -499,6 +516,17 @@ The strategy routes orders based on alpha strength to optimize the fee/urgency t
 | **0.6 – 0.85** (moderate) | Limit order | 0.05% (maker) | Signal is directional but not urgent — post at favorable price, save 5bps per trade |
 | **< 0.6** | No order | — | Below entry threshold — insufficient edge to justify transaction costs |
 | **Risk/stop exits** | Market order | 0.10% (taker) | Stops are non-negotiable — guaranteed fill to cap downside |
+
+**Limit order timeout:** Pending limit orders are automatically cancelled after `order_timeout_seconds` (default 30s) to prevent capital from being trapped indefinitely in unfilled orders.
+
+**Graduated exits:** Instead of all-or-nothing exits, configurable exit tiers allow partial position reduction:
+```yaml
+exit_tiers:
+  - threshold: -0.1   # first tier: sell 50% when alpha drops to -0.1
+    sell_pct: 0.5
+  - threshold: -0.3   # second tier: sell remaining when alpha drops to -0.3
+    sell_pct: 1.0
+```
 
 Over 65 symbols and a 10-day competition, the fee differential between market and limit orders compounds significantly. Routing ~60% of entries through limit orders (alpha 0.6–0.85) saves an estimated 3-5bps on average fill cost.
 
@@ -529,6 +557,8 @@ Uses Half-Kelly criterion scaled by alpha signal conviction:
 | 0.80 (moderate conviction) | ~6.3% of NAV |
 | 1.00 (maximum conviction) | ~7.5% of NAV |
 
+**Adaptive Kelly (optional):** When `adaptive_kelly: true`, the `TradeTracker` replaces static win rate / payoff ratio priors with blended estimates from rolling trade outcomes. The blending coefficient `alpha = min(1, n_trades / min_trades)` smoothly transitions from pure priors to observed statistics as more trades are recorded.
+
 ## Configuration
 
 All parameters live in `config/default.yaml`. Key settings:
@@ -555,6 +585,12 @@ alpha:
   exit_threshold: -0.2      # alpha < this → sell
   model_path: "artifacts/model.onnx"
   seq_len: 60               # LSTM lookback window (60 × 1m = 1 hour)
+  resample_minutes: 5       # gate alpha scoring on 5-min bar completion
+  multi_timeframes: [15, 60] # higher-TF filters (15m EMA crossover, 1h momentum)
+  decay_half_life_s: 999999  # alpha signal decay (set 150 to enable)
+  icir_prior_path: "artifacts/icir_priors.json"  # per-symbol factor weights
+  icir_window: 100           # rolling IC window for online learning
+  icir_min_lambda: 0.3       # floor shrinkage (always keep 30% prior)
 
 # Position sizing (Half-Kelly)
 strategy:
@@ -564,6 +600,9 @@ strategy:
   estimated_win_rate: 0.55   # conservative prior
   estimated_payoff: 1.5      # avg_win / avg_loss
   urgent_alpha_threshold: 0.85  # alpha above this → market order (below → limit order)
+  confirmation_bars: 2       # require N consecutive bars above threshold
+  adaptive_kelly: false      # enable rolling Kelly from trade outcomes
+  exit_tiers: []             # graduated exits (see Signal → Order Routing)
 
 # Risk limits
 risk:

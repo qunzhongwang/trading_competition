@@ -75,3 +75,30 @@ class CandleResampler:
             timestamp=bucket[-1].timestamp,
             is_closed=True,
         )
+
+
+class MultiResampler:
+    """Wraps multiple CandleResamplers for multi-timeframe support.
+
+    Push a 1-min candle once, get back completed bars for each configured period.
+    """
+
+    def __init__(self, periods: List[int]):
+        if not periods:
+            raise ValueError("periods must be non-empty")
+        self._resamplers: Dict[int, CandleResampler] = {
+            p: CandleResampler(p) for p in periods
+        }
+
+    def push(self, candle: OHLCV) -> Dict[int, Optional[OHLCV]]:
+        """Push a 1-min candle. Returns {period: completed_bar_or_None} for each period."""
+        return {p: r.push(candle) for p, r in self._resamplers.items()}
+
+    @property
+    def primary_minutes(self) -> int:
+        """The smallest period (used for alpha gating)."""
+        return min(self._resamplers.keys())
+
+    @property
+    def periods(self) -> List[int]:
+        return sorted(self._resamplers.keys())

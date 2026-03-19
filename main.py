@@ -34,7 +34,7 @@ from models.inference import AlphaEngine
 from models.model_wrapper import ModelWrapper
 from risk.risk_shield import RiskShield
 from risk.tracker import PortfolioTracker
-from data.resampler import CandleResampler
+from data.resampler import CandleResampler, MultiResampler
 from strategy.monitor import StrategyMonitor
 
 logger = logging.getLogger(__name__)
@@ -177,8 +177,6 @@ async def main(config: dict) -> None:
             logger.warning("Model path '%s' not found, falling back to rule_based", model_path)
             config["alpha"]["engine"] = "rule_based"
 
-    alpha_engine = AlphaEngine(config, extractor, model)
-
     # 7. Portfolio tracker
     initial_capital = paper_cfg.get("initial_capital", 1000000.0)
     fee_bps = paper_cfg.get("fee_bps", 10.0)
@@ -188,13 +186,67 @@ async def main(config: dict) -> None:
     risk_shield = RiskShield(config)
 
     # 9. Order manager
-    order_manager = OrderManager(executor, tracker)
+    exec_cfg = config.get("execution", {})
+    order_timeout = exec_cfg.get("order_timeout_seconds", 0)
+    order_manager = OrderManager(executor, tracker, timeout_seconds=order_timeout)
+    if order_timeout > 0:
+        logger.info("Order timeout: %ds for pending limit orders", order_timeout)
 
     # 10. Candle resampler (optional, for N-min alpha gating)
     resample_minutes = alpha_cfg.get("resample_minutes", 1)
     resampler = CandleResampler(resample_minutes) if resample_minutes > 1 else None
     if resampler:
         logger.info("Candle resampler: %d-min bars for alpha scoring", resample_minutes)
+
+    # 10b. Multi-timeframe resampler (for higher-TF filters)
+    multi_timeframes = alpha_cfg.get("multi_timeframes", [])
+    multi_resampler = None
+    if multi_timeframes:
+        # Build periods: primary resample + higher TFs
+        all_periods = sorted(set([resample_minutes] + multi_timeframes))
+        multi_resampler = MultiResampler(all_periods)
+        resampler = None  # multi_resampler supersedes single resampler
+        logger.info("Multi-timeframe resampler: periods=%s (primary=%d)", all_periods, multi_resampler.primary_minutes)
+
+    # 10c. ICIR tracker (optional, for per-symbol adaptive weights)
+    icir_tracker = None
+    icir_prior_path = alpha_cfg.get("icir_prior_path", "")
+    if alpha_cfg.get("icir_window"):
+        from models.icir_tracker import BayesianICIRTracker
+        import json
+
+        prior_weights = {}
+        if icir_prior_path and Path(icir_prior_path).exists():
+            with open(icir_prior_path) as f:
+                prior_weights = json.load(f)
+            logger.info("Loaded ICIR priors for %d symbols from %s", len(prior_weights), icir_prior_path)
+
+        icir_tracker = BayesianICIRTracker(
+            prior_weights=prior_weights,
+            n_factors=4,
+            window=alpha_cfg.get("icir_window", 100),
+            min_samples=alpha_cfg.get("icir_min_samples", 30),
+            min_lambda=alpha_cfg.get("icir_min_lambda", 0.3),
+            tau=alpha_cfg.get("icir_tau", 50.0),
+        )
+        logger.info("ICIR tracker enabled: window=%d, min_samples=%d, min_lambda=%.2f",
+                     alpha_cfg.get("icir_window", 100), alpha_cfg.get("icir_min_samples", 30),
+                     alpha_cfg.get("icir_min_lambda", 0.3))
+
+    # 10d. Trade tracker for adaptive Kelly
+    trade_tracker = None
+    if config.get("strategy", {}).get("adaptive_kelly", False):
+        from strategy.trade_tracker import TradeTracker
+        strategy_cfg = config.get("strategy", {})
+        trade_tracker = TradeTracker(
+            window=strategy_cfg.get("kelly_window", 50),
+            min_trades=strategy_cfg.get("kelly_min_trades", 10),
+            prior_win_rate=strategy_cfg.get("estimated_win_rate", 0.55),
+            prior_payoff=strategy_cfg.get("estimated_payoff", 1.5),
+        )
+        logger.info("Adaptive Kelly sizing enabled (window=%d)", strategy_cfg.get("kelly_window", 50))
+
+    alpha_engine = AlphaEngine(config, extractor, model, icir_tracker=icir_tracker)
 
     # 11. Strategy monitor (orchestrator)
     monitor = StrategyMonitor(
@@ -206,6 +258,9 @@ async def main(config: dict) -> None:
         tracker=tracker,
         order_manager=order_manager,
         resampler=resampler,
+        multi_resampler=multi_resampler,
+        trade_tracker=trade_tracker,
+        icir_tracker=icir_tracker,
     )
 
     # ── Graceful Shutdown ──

@@ -35,7 +35,7 @@ def _fast_config(entry_threshold: float = 0.15):
             "seq_len": 30,
         },
         "strategy": {"max_positions_per_symbol": 1, "position_size_pct": 0.10,
-                     "urgent_alpha_threshold": 0.05},
+                     "urgent_alpha_threshold": 0.05, "confirmation_bars": 1},
         "risk": {
             "max_portfolio_exposure": 0.50,
             "max_single_exposure": 0.15,

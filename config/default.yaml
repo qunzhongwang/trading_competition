@@ -98,6 +98,13 @@ alpha:
   model_path: "artifacts/model.onnx"
   seq_len: 240              # model lookback window (240 × 5min = 20h)
   resample_minutes: 5       # gate alpha on N-min bar completion
+  multi_timeframes: [15, 60]  # higher-TF filters (15m EMA crossover, 1h momentum)
+  decay_half_life_s: 999999   # alpha signal decay half-life (set 150 to enable)
+  icir_prior_path: "artifacts/icir_priors.json"
+  icir_window: 100          # rolling IC window
+  icir_min_samples: 30      # samples before trusting online data
+  icir_min_lambda: 0.3      # floor shrinkage (always keep 30% prior)
+  icir_tau: 50.0            # decay rate for lambda
 
 strategy:
   max_positions_per_symbol: 1
@@ -108,6 +115,11 @@ strategy:
   estimated_win_rate: 0.55  # prior — calibrate from backtest results
   estimated_payoff: 1.5     # avg_win / avg_loss — calibrate from backtest results
   urgent_alpha_threshold: 0.85  # alpha above this → market order
+  confirmation_bars: 2      # require N consecutive bars above threshold
+  adaptive_kelly: false     # enable adaptive Kelly sizing from trade history
+  kelly_window: 50          # rolling window for adaptive Kelly
+  kelly_min_trades: 10      # min trades before blending with priors
+  exit_tiers: []            # graduated exits, e.g. [{threshold: -0.1, sell_pct: 0.5}, {threshold: -0.3, sell_pct: 1.0}]
 
 risk:
   max_portfolio_exposure: 0.50
