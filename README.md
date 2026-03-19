@@ -77,9 +77,11 @@ python main.py
 # 7. Start the bot in a tmux session (persists after Session Manager disconnect)
 tmux new -s bot
 source .venv/bin/activate
-./scripts/run.sh roostoo
+./scripts/start_competition.sh
 # Press Ctrl+B then D to detach from tmux (bot keeps running)
 ```
+
+`start_competition.sh` auto-restarts the bot up to 50 times on crash with backoff. For a quick one-off test without auto-restart, use `./scripts/run.sh roostoo` instead.
 
 **Reconnecting after Session Manager disconnect:**
 
@@ -91,7 +93,7 @@ tmux attach -t bot
 cd ~/trading_competition
 tmux new -s bot
 source .venv/bin/activate
-./scripts/run.sh roostoo
+./scripts/start_competition.sh
 ```
 
 **Monitoring (in a second tmux window):**
@@ -127,7 +129,7 @@ tail -f ~/trading_competition/logs/trades_*.jsonl            # trade events
 | Run tests | `pytest` — all 233 tests should pass | |
 | Deploy to EC2 | Connect via Session Manager, clone repo, `uv sync` | |
 | Set EC2 API keys | Create `.env` with competition keys | |
-| Start bot in tmux | `tmux new -s bot` then `./scripts/run.sh roostoo` | |
+| Start bot in tmux | `tmux new -s bot` then `./scripts/start_competition.sh` | |
 | Detach tmux | `Ctrl+B` then `D` — bot keeps running | |
 | Monitor first hour | `tail -f logs/trading_roostoo_*.log` — watch for fills and risk metrics | |
 

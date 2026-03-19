@@ -18,11 +18,11 @@ if [ -f .env ]; then
     set +a
 fi
 
-# Validate required env vars
-if [ -z "${ROOSTOO_API_KEY:-}" ] || [ -z "${ROOSTOO_API_SECRET:-}" ]; then
-    echo "ERROR: ROOSTOO_API_KEY and ROOSTOO_API_SECRET must be set"
-    echo "  export ROOSTOO_API_KEY=your_key"
-    echo "  export ROOSTOO_API_SECRET=your_secret"
+# Validate required env vars (either COMP or regular keys)
+if [ -z "${ROOSTOO_COMP_API_KEY:-}${ROOSTOO_API_KEY:-}" ] || [ -z "${ROOSTOO_COMP_API_SECRET:-}${ROOSTOO_API_SECRET:-}" ]; then
+    echo "ERROR: Roostoo API credentials must be set (either ROOSTOO_COMP_* or ROOSTOO_*)"
+    echo "  export ROOSTOO_COMP_API_KEY=your_key"
+    echo "  export ROOSTOO_COMP_API_SECRET=your_secret"
     echo "  Or create a .env file in $PROJECT_DIR"
     exit 1
 fi
