@@ -229,14 +229,18 @@ class RoostooExecutor(BaseExecutor):
         timestamp = self._auth.get_timestamp()
         params = {"timestamp": str(timestamp)}
         data = await self._signed_request("GET", "/v3/balance", params)
+        logger.debug("Roostoo /v3/balance raw response: %s", data)
 
         balances: Dict[str, float] = {}
         if data and data.get("Success"):
-            wallet = data.get("Wallet", {})
+            # API may return "SpotWallet" or "Wallet" depending on version
+            wallet = data.get("SpotWallet") or data.get("Wallet") or {}
             for asset, amounts in wallet.items():
                 free = float(amounts.get("Free", 0))
                 if free > 0 or asset == "USD":
                     balances[asset] = free
+        elif data:
+            logger.warning("Roostoo balance failed: %s", data.get("ErrMsg", data))
         return balances
 
     async def get_exchange_info(self) -> Dict[str, Any]:
