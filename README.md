@@ -59,6 +59,12 @@ The competition uses AWS Session Manager (no SSH keys). Follow the [Roostoo Hack
 
 Once connected to your EC2 instance via Session Manager:
 
+**Note:** Session Manager uses `sh` by default. Switch to `bash` first:
+
+```bash
+bash
+```
+
 #### Step 1 — Install system dependencies
 
 ```bash
@@ -118,12 +124,14 @@ The `start_competition.sh` script handles everything: loads `.env`, activates th
 #### Reconnecting after Session Manager disconnect
 
 ```bash
+bash                    # Session Manager defaults to sh, switch to bash
 tmux attach -t bot
 ```
 
 If the tmux session died:
 
 ```bash
+bash
 cd ~/trading_competition
 tmux new -s bot
 ./scripts/start_competition.sh
