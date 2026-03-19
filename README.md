@@ -41,26 +41,78 @@ python -m models.train --synthetic --symbols BTC/USDT --device auto
 # Then set alpha.engine to "lstm" or "ensemble" in config/default.yaml
 ```
 
-### Deploy to AWS EC2 (recommended for 10-day competition)
+### Deploy to AWS EC2 via Session Manager
+
+The competition uses AWS Session Manager (no SSH keys). Follow the [Roostoo Hackathon Guide](https://roostoo.notion.site/Hackathon-Guide-How-to-Sign-In-AWS-and-Launch-Your-Bot-309ba22fed798071b4dde6d1e8666816) for steps 1-6 (AWS sign-in, launch instance, connect via Session Manager).
+
+Once connected to your EC2 instance via Session Manager:
 
 ```bash
-# One-command deploy: installs Python 3.11, uv, clones repo, sets up systemd
-./scripts/deploy_aws.sh <EC2_HOST> [~/.ssh/your-key.pem]
+# 1. Install system dependencies
+sudo apt-get update -y
+sudo apt-get install -y python3.11 python3.11-venv git curl tmux
 
-# SSH in and set API keys
-ssh -i ~/.ssh/your-key.pem ubuntu@<EC2_HOST>
-cat > /home/ubuntu/trading_competition/.env << 'EOF'
+# 2. Install uv (Python package manager)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+
+# 3. Clone the repo
+cd ~
+git clone https://github.com/qunzhongwang/trading_competition.git
+cd trading_competition
+
+# 4. Create virtual environment and install dependencies
+uv venv .venv && source .venv/bin/activate && uv sync
+
+# 5. Set API credentials
+cat > .env << 'EOF'
 ROOSTOO_COMP_API_KEY=your_competition_key
 ROOSTOO_COMP_API_SECRET=your_competition_secret
 EOF
 
-# Start (systemd — auto-restarts on crash)
-sudo systemctl start trading-bot
+# 6. Quick smoke test (paper mode, Ctrl+C after 1-2 minutes)
+python main.py
 
-# Monitor
-journalctl -u trading-bot -f                          # system logs
-tail -f /home/ubuntu/trading_competition/logs/trades_*.jsonl  # trade events
+# 7. Start the bot in a tmux session (persists after Session Manager disconnect)
+tmux new -s bot
+source .venv/bin/activate
+./scripts/run.sh roostoo
+# Press Ctrl+B then D to detach from tmux (bot keeps running)
 ```
+
+**Reconnecting after Session Manager disconnect:**
+
+```bash
+# Re-attach to the running bot
+tmux attach -t bot
+
+# If tmux session died, restart:
+cd ~/trading_competition
+tmux new -s bot
+source .venv/bin/activate
+./scripts/run.sh roostoo
+```
+
+**Monitoring (in a second tmux window):**
+
+```bash
+# Inside tmux, press Ctrl+B then C to open a new window
+tail -f ~/trading_competition/logs/trading_roostoo_*.log    # main logs
+tail -f ~/trading_competition/logs/trades_*.jsonl            # trade events
+
+# Switch between tmux windows: Ctrl+B then N (next) / P (previous)
+```
+
+**Useful tmux commands:**
+
+| Action | Keys |
+|--------|------|
+| Detach (bot keeps running) | `Ctrl+B`, then `D` |
+| New window | `Ctrl+B`, then `C` |
+| Next/prev window | `Ctrl+B`, then `N` / `P` |
+| List sessions | `tmux ls` |
+| Kill session | `tmux kill-session -t bot` |
 
 ### Pre-Competition Checklist
 
@@ -70,13 +122,14 @@ tail -f /home/ubuntu/trading_competition/logs/trades_*.jsonl  # trade events
 | Set API credentials in `.env` | Use `ROOSTOO_COMP_*` keys for competition | |
 | Choose alpha engine | Set `alpha.engine` in `config/default.yaml` (`rule_based` / `lstm` / `ensemble`) | |
 | Train model (if using LSTM) | `python -m models.train --synthetic --device auto` | |
-| Paper test run (1+ hours) | `python main.py` — verify no crashes, check logs | |
+| Paper test run (5+ min) | `python main.py` — verify no crashes, check logs | |
 | Roostoo test run | `python main.py --mode roostoo` — verify orders execute | |
-| Run tests | `pytest` — all 210 tests should pass | |
-| Deploy to EC2 | `./scripts/deploy_aws.sh <host>` | |
-| Set EC2 API keys | SSH in, create `.env` with competition keys | |
-| Start bot | `sudo systemctl start trading-bot` | |
-| Monitor first hour | `journalctl -u trading-bot -f` — watch for fills and risk metrics | |
+| Run tests | `pytest` — all 233 tests should pass | |
+| Deploy to EC2 | Connect via Session Manager, clone repo, `uv sync` | |
+| Set EC2 API keys | Create `.env` with competition keys | |
+| Start bot in tmux | `tmux new -s bot` then `./scripts/run.sh roostoo` | |
+| Detach tmux | `Ctrl+B` then `D` — bot keeps running | |
+| Monitor first hour | `tail -f logs/trading_roostoo_*.log` — watch for fills and risk metrics | |
 
 ### Credential Priority
 
