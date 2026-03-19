@@ -31,3 +31,5 @@ logs/
 htmlcov/
 
 wandb/
+
+.ruff_cache/

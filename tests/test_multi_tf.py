@@ -1,4 +1,5 @@
 """Tests for multi-timeframe resampler and alpha filter."""
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta
@@ -6,13 +7,16 @@ from datetime import datetime, timedelta
 import pytest
 
 from core.models import OHLCV
-from data.resampler import CandleResampler, MultiResampler
+from data.resampler import MultiResampler
 
 
 def _candle(symbol: str, minute_offset: int, close: float = 100.0) -> OHLCV:
     return OHLCV(
         symbol=symbol,
-        open=close - 1, high=close + 1, low=close - 2, close=close,
+        open=close - 1,
+        high=close + 1,
+        low=close - 2,
+        close=close,
         volume=10.0,
         timestamp=datetime(2025, 1, 1, 0, 0) + timedelta(minutes=minute_offset),
         is_closed=True,

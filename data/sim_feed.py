@@ -6,7 +6,7 @@ import logging
 import math
 import random
 from datetime import datetime, timedelta
-from typing import List, Optional
+from typing import List
 
 from core.models import OHLCV
 from data.buffer import LiveBuffer
@@ -31,8 +31,18 @@ class SimulatedFeed:
 
         # GBM params per symbol (realistic crypto defaults)
         self._sim_params = {
-            "BTC/USDT": {"price": 65000.0, "drift": 0.0001, "vol": 0.002, "base_volume": 50.0},
-            "ETH/USDT": {"price": 3500.0, "drift": 0.00015, "vol": 0.003, "base_volume": 500.0},
+            "BTC/USDT": {
+                "price": 65000.0,
+                "drift": 0.0001,
+                "vol": 0.002,
+                "base_volume": 50.0,
+            },
+            "ETH/USDT": {
+                "price": 3500.0,
+                "drift": 0.00015,
+                "vol": 0.003,
+                "base_volume": 500.0,
+            },
         }
 
     async def start(self) -> None:
@@ -83,7 +93,10 @@ class SimulatedFeed:
         # Initialize prices
         prices = {}
         for sym in self._symbols:
-            params = self._sim_params.get(sym, {"price": 1000.0, "drift": 0.0001, "vol": 0.002, "base_volume": 100.0})
+            params = self._sim_params.get(
+                sym,
+                {"price": 1000.0, "drift": 0.0001, "vol": 0.002, "base_volume": 100.0},
+            )
             prices[sym] = params["price"]
 
         candle_idx = 0
@@ -91,7 +104,15 @@ class SimulatedFeed:
             ts = now + timedelta(minutes=candle_idx)
 
             for sym in self._symbols:
-                params = self._sim_params.get(sym, {"price": 1000.0, "drift": 0.0001, "vol": 0.002, "base_volume": 100.0})
+                params = self._sim_params.get(
+                    sym,
+                    {
+                        "price": 1000.0,
+                        "drift": 0.0001,
+                        "vol": 0.002,
+                        "base_volume": 100.0,
+                    },
+                )
                 price = prices[sym]
 
                 # GBM: dS = S * (mu*dt + sigma*dW)
@@ -105,8 +126,12 @@ class SimulatedFeed:
 
                 # High/low with some noise
                 intra_vol = abs(returns) + params["vol"] * math.sqrt(dt) * 0.5
-                high_price = max(open_price, close_price) * (1 + abs(random.gauss(0, intra_vol)))
-                low_price = min(open_price, close_price) * (1 - abs(random.gauss(0, intra_vol)))
+                high_price = max(open_price, close_price) * (
+                    1 + abs(random.gauss(0, intra_vol))
+                )
+                low_price = min(open_price, close_price) * (
+                    1 - abs(random.gauss(0, intra_vol))
+                )
 
                 volume = params["base_volume"] * (1 + abs(random.gauss(0, 0.5)))
 

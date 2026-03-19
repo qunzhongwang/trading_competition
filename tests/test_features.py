@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from features.extractor import FeatureExtractor
-from tests.conftest import make_candle, make_candle_series
+from tests.conftest import make_candle
 
 
 @pytest.fixture
@@ -52,7 +52,9 @@ class TestEMA:
 
 class TestATR:
     def test_constant_candles(self, extractor):
-        candles = [make_candle(close=100, high=100, low=100, open_=100) for _ in range(20)]
+        candles = [
+            make_candle(close=100, high=100, low=100, open_=100) for _ in range(20)
+        ]
         atr = extractor.compute_atr(candles, 14)
         assert atr == pytest.approx(0.0, abs=0.01)
 

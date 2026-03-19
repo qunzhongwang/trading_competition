@@ -62,10 +62,10 @@ class FeatureVector(BaseModel):
     atr: float = 0.0
     momentum: float = 0.0
     volatility: float = 0.0
-    order_book_imbalance: float = 0.0   # bid/ask volume ratio
-    volume_ratio: float = 0.0           # current vol / rolling avg
-    funding_rate: float = 0.0           # perpetual funding rate
-    taker_ratio: float = 0.0            # taker buy/sell ratio
+    order_book_imbalance: float = 0.0  # bid/ask volume ratio
+    volume_ratio: float = 0.0  # current vol / rolling avg
+    funding_rate: float = 0.0  # perpetual funding rate
+    taker_ratio: float = 0.0  # taker buy/sell ratio
     raw: Dict[str, float] = Field(default_factory=dict)
 
 
@@ -129,6 +129,7 @@ class RiskMetrics(BaseModel):
 
     Competition score = 0.4 * Sortino + 0.3 * Sharpe + 0.3 * Calmar
     """
+
     sharpe_ratio: float = 0.0
     sortino_ratio: float = 0.0
     calmar_ratio: float = 0.0

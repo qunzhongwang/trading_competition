@@ -16,8 +16,13 @@ class ModelWrapper:
     PyTorch is the fallback.
     """
 
-    def __init__(self, model_path: str, n_features: int = 10, use_compile: bool = False,
-                 model_type: str = "lstm"):
+    def __init__(
+        self,
+        model_path: str,
+        n_features: int = 10,
+        use_compile: bool = False,
+        model_type: str = "lstm",
+    ):
         self._model_path = model_path
         self._n_features = n_features
         self._use_compile = use_compile
@@ -49,9 +54,11 @@ class ModelWrapper:
 
         if self._model_type == "transformer":
             from models.transformer_model import TransformerAlphaModel
+
             model = TransformerAlphaModel(n_features=self._n_features)
         else:
             from models.lstm_model import LSTMAlphaModel
+
             model = LSTMAlphaModel(n_features=self._n_features)
         state_dict = torch.load(self._model_path, map_location="cpu", weights_only=True)
         model.load_state_dict(state_dict)

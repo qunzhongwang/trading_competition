@@ -2,6 +2,7 @@
 
 Writes append-only JSONL files for orders, signals, and API events.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -52,19 +53,21 @@ class TradeLogger:
         latency_ms: Optional[float] = None,
     ) -> None:
         """Log an order event."""
-        await self._write_event({
-            "event": "order",
-            "timestamp": datetime.utcnow().isoformat(),
-            "symbol": symbol,
-            "side": side,
-            "order_type": order_type,
-            "quantity": quantity,
-            "price": price,
-            "order_id": order_id,
-            "status": status,
-            "roostoo_response": roostoo_response,
-            "latency_ms": latency_ms,
-        })
+        await self._write_event(
+            {
+                "event": "order",
+                "timestamp": datetime.utcnow().isoformat(),
+                "symbol": symbol,
+                "side": side,
+                "order_type": order_type,
+                "quantity": quantity,
+                "price": price,
+                "order_id": order_id,
+                "status": status,
+                "roostoo_response": roostoo_response,
+                "latency_ms": latency_ms,
+            }
+        )
 
     async def log_signal(
         self,
@@ -75,15 +78,17 @@ class TradeLogger:
         reasoning: Optional[str] = None,
     ) -> None:
         """Log a signal event."""
-        await self._write_event({
-            "event": "signal",
-            "timestamp": datetime.utcnow().isoformat(),
-            "symbol": symbol,
-            "alpha_score": alpha_score,
-            "engine_type": engine_type,
-            "action": action,
-            "reasoning": reasoning,
-        })
+        await self._write_event(
+            {
+                "event": "signal",
+                "timestamp": datetime.utcnow().isoformat(),
+                "symbol": symbol,
+                "alpha_score": alpha_score,
+                "engine_type": engine_type,
+                "action": action,
+                "reasoning": reasoning,
+            }
+        )
 
     async def log_api(
         self,
@@ -95,21 +100,30 @@ class TradeLogger:
     ) -> None:
         """Log an API event (with secrets redacted from params)."""
         safe_params = _redact_secrets(params) if params else None
-        await self._write_event({
-            "event": "api",
-            "timestamp": datetime.utcnow().isoformat(),
-            "endpoint": endpoint,
-            "params": safe_params,
-            "response_code": response_code,
-            "success": success,
-            "error_msg": error_msg,
-        })
+        await self._write_event(
+            {
+                "event": "api",
+                "timestamp": datetime.utcnow().isoformat(),
+                "endpoint": endpoint,
+                "params": safe_params,
+                "response_code": response_code,
+                "success": success,
+                "error_msg": error_msg,
+            }
+        )
 
 
 def _redact_secrets(params: Dict) -> Dict:
     """Redact sensitive keys from params dict."""
-    sensitive_keys = {"api_key", "api_secret", "secret", "password", "token",
-                      "RST-API-KEY", "MSG-SIGNATURE"}
+    sensitive_keys = {
+        "api_key",
+        "api_secret",
+        "secret",
+        "password",
+        "token",
+        "RST-API-KEY",
+        "MSG-SIGNATURE",
+    }
     return {
         k: "***REDACTED***" if k.lower() in {s.lower() for s in sensitive_keys} else v
         for k, v in params.items()

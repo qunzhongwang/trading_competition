@@ -14,8 +14,12 @@ logger = logging.getLogger(__name__)
 class OrderManager:
     """Manages order lifecycle: submit, track, cancel, and notify on fills."""
 
-    def __init__(self, executor: BaseExecutor, tracker: PortfolioTracker,
-                 timeout_seconds: float = 0):
+    def __init__(
+        self,
+        executor: BaseExecutor,
+        tracker: PortfolioTracker,
+        timeout_seconds: float = 0,
+    ):
         self._executor = executor
         self._tracker = tracker
         self._active_orders: Dict[str, Order] = {}
@@ -26,14 +30,21 @@ class OrderManager:
         """Submit order to executor and handle the result."""
         logger.info(
             "Submitting: %s %s %s qty=%.6f",
-            order.side.value, order.symbol, order.order_type.value, order.quantity,
+            order.side.value,
+            order.symbol,
+            order.order_type.value,
+            order.quantity,
         )
 
         order = await self._executor.execute(order)
 
         if order.status == OrderStatus.FILLED:
             self._on_fill(order)
-        elif order.status in (OrderStatus.SUBMITTED, OrderStatus.PENDING, OrderStatus.PARTIALLY_FILLED):
+        elif order.status in (
+            OrderStatus.SUBMITTED,
+            OrderStatus.PENDING,
+            OrderStatus.PARTIALLY_FILLED,
+        ):
             self._active_orders[order.order_id] = order
         else:
             logger.warning("Order %s status: %s", order.order_id, order.status.value)
@@ -72,7 +83,9 @@ class OrderManager:
                     to_cancel.append(order_id)
                     logger.info(
                         "Order %s timed out after %.0fs (limit: %.0fs), cancelling",
-                        order_id, age, self._timeout_seconds,
+                        order_id,
+                        age,
+                        self._timeout_seconds,
                     )
 
         for order_id in to_cancel:

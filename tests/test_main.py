@@ -1,4 +1,5 @@
 """Tests for main.py — config loading and component initialization."""
+
 from __future__ import annotations
 
 import pytest
@@ -20,8 +21,16 @@ class TestLoadConfig:
     def test_config_has_required_sections(self):
         config = load_config("config/default.yaml")
         required = [
-            "mode", "symbols", "exchange", "data", "features",
-            "alpha", "strategy", "risk", "execution", "paper",
+            "mode",
+            "symbols",
+            "exchange",
+            "data",
+            "features",
+            "alpha",
+            "strategy",
+            "risk",
+            "execution",
+            "paper",
         ]
         for key in required:
             assert key in config, f"Missing config section: {key}"

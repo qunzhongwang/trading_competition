@@ -12,12 +12,12 @@ Pipeline:
     4. Train LSTM or Transformer with MSE loss
     5. Export best model to ONNX
 """
+
 from __future__ import annotations
 
 import argparse
 import json
 import logging
-import os
 import sys
 import time
 from datetime import datetime, timedelta
@@ -163,11 +163,13 @@ def setup_train_logging() -> None:
 
     logger.info("Training log: %s", log_file)
 
+
 HISTORICAL_DIR = PROJECT_ROOT / "data" / "historical"
 ARTIFACTS_DIR = PROJECT_ROOT / "artifacts"
 
 
 # ── Data Fetching ───────────────────────────────────────────────────────────
+
 
 def fetch_ohlcv(symbol: str, interval: str = "1m", days: int = 90) -> List[list]:
     """Fetch historical OHLCV from exchange via ccxt, with CSV caching."""
@@ -189,25 +191,32 @@ def fetch_ohlcv(symbol: str, interval: str = "1m", days: int = 90) -> List[list]
     if csv_path.exists() and symbol in fetch_log:
         logger.info("Loading cached data from %s", csv_path)
         import csv
+
         with open(csv_path, "r") as f:
             reader = csv.reader(f)
             next(reader)  # skip header
             for row in reader:
-                cached_data.append([
-                    int(row[0]),    # timestamp ms
-                    float(row[1]),  # open
-                    float(row[2]),  # high
-                    float(row[3]),  # low
-                    float(row[4]),  # close
-                    float(row[5]),  # volume
-                ])
+                cached_data.append(
+                    [
+                        int(row[0]),  # timestamp ms
+                        float(row[1]),  # open
+                        float(row[2]),  # high
+                        float(row[3]),  # low
+                        float(row[4]),  # close
+                        float(row[5]),  # volume
+                    ]
+                )
         if cached_data:
             last_ts = cached_data[-1][0]
             logger.info("Cache has %d candles, last ts=%d", len(cached_data), last_ts)
 
     # Fetch new data
     exchange = ccxt.binance({"enableRateLimit": True})
-    since = last_ts + 60000 if last_ts else int((datetime.utcnow() - timedelta(days=days)).timestamp() * 1000)
+    since = (
+        last_ts + 60000
+        if last_ts
+        else int((datetime.utcnow() - timedelta(days=days)).timestamp() * 1000)
+    )
     now_ms = int(datetime.utcnow().timestamp() * 1000)
 
     all_new = []
@@ -229,10 +238,16 @@ def fetch_ohlcv(symbol: str, interval: str = "1m", days: int = 90) -> List[list]
 
     # Merge and save
     all_data = cached_data + all_new
-    logger.info("Total candles: %d (cached=%d, new=%d)", len(all_data), len(cached_data), len(all_new))
+    logger.info(
+        "Total candles: %d (cached=%d, new=%d)",
+        len(all_data),
+        len(cached_data),
+        len(all_new),
+    )
 
     if all_new:
         import csv
+
         with open(csv_path, "w", newline="") as f:
             writer = csv.writer(f)
             writer.writerow(["timestamp", "open", "high", "low", "close", "volume"])
@@ -254,16 +269,18 @@ def raw_to_ohlcv(raw_data: List[list], symbol: str) -> List[OHLCV]:
     """Convert raw ccxt OHLCV lists to OHLCV model objects."""
     candles = []
     for row in raw_data:
-        candles.append(OHLCV(
-            symbol=symbol,
-            open=row[1],
-            high=row[2],
-            low=row[3],
-            close=row[4],
-            volume=row[5],
-            timestamp=datetime.utcfromtimestamp(row[0] / 1000),
-            is_closed=True,
-        ))
+        candles.append(
+            OHLCV(
+                symbol=symbol,
+                open=row[1],
+                high=row[2],
+                low=row[3],
+                close=row[4],
+                volume=row[5],
+                timestamp=datetime.utcfromtimestamp(row[0] / 1000),
+                is_closed=True,
+            )
+        )
     return candles
 
 
@@ -286,7 +303,9 @@ def resample_candles(candles: List[OHLCV], minutes: int) -> List[OHLCV]:
         """Floor timestamp to nearest N-minute boundary."""
         total_min = ts.hour * 60 + ts.minute
         floored_min = (total_min // minutes) * minutes
-        return ts.replace(hour=floored_min // 60, minute=floored_min % 60, second=0, microsecond=0)
+        return ts.replace(
+            hour=floored_min // 60, minute=floored_min % 60, second=0, microsecond=0
+        )
 
     current_bucket_ts = _floor_ts(candles[0].timestamp)
 
@@ -295,16 +314,18 @@ def resample_candles(candles: List[OHLCV], minutes: int) -> List[OHLCV]:
         if bucket_ts != current_bucket_ts:
             # Emit completed bucket
             if len(bucket) == minutes:
-                result.append(OHLCV(
-                    symbol=symbol,
-                    open=bucket[0].open,
-                    high=max(b.high for b in bucket),
-                    low=min(b.low for b in bucket),
-                    close=bucket[-1].close,
-                    volume=sum(b.volume for b in bucket),
-                    timestamp=bucket[-1].timestamp,
-                    is_closed=True,
-                ))
+                result.append(
+                    OHLCV(
+                        symbol=symbol,
+                        open=bucket[0].open,
+                        high=max(b.high for b in bucket),
+                        low=min(b.low for b in bucket),
+                        close=bucket[-1].close,
+                        volume=sum(b.volume for b in bucket),
+                        timestamp=bucket[-1].timestamp,
+                        is_closed=True,
+                    )
+                )
             bucket = [c]
             current_bucket_ts = bucket_ts
         else:
@@ -312,18 +333,25 @@ def resample_candles(candles: List[OHLCV], minutes: int) -> List[OHLCV]:
 
     # Emit last bucket if complete
     if len(bucket) == minutes:
-        result.append(OHLCV(
-            symbol=symbol,
-            open=bucket[0].open,
-            high=max(b.high for b in bucket),
-            low=min(b.low for b in bucket),
-            close=bucket[-1].close,
-            volume=sum(b.volume for b in bucket),
-            timestamp=bucket[-1].timestamp,
-            is_closed=True,
-        ))
+        result.append(
+            OHLCV(
+                symbol=symbol,
+                open=bucket[0].open,
+                high=max(b.high for b in bucket),
+                low=min(b.low for b in bucket),
+                close=bucket[-1].close,
+                volume=sum(b.volume for b in bucket),
+                timestamp=bucket[-1].timestamp,
+                is_closed=True,
+            )
+        )
 
-    logger.info("Resampled %d 1-min candles → %d %d-min candles", len(candles), len(result), minutes)
+    logger.info(
+        "Resampled %d 1-min candles → %d %d-min candles",
+        len(candles),
+        len(result),
+        minutes,
+    )
     return result
 
 
@@ -345,7 +373,9 @@ def load_parquet_ohlcv(parquet_dir: str, symbols: Optional[List[str]] = None) ->
     if not parquet_files:
         raise FileNotFoundError(f"No parquet files in {parquet_dir}")
 
-    logger.info("Loading parquet files from %s (%d files)", parquet_dir, len(parquet_files))
+    logger.info(
+        "Loading parquet files from %s (%d files)", parquet_dir, len(parquet_files)
+    )
     tables = [pq.read_table(f) for f in parquet_files]
     table = pa.concat_tables(tables)
     logger.info("Loaded %d total rows", len(table))
@@ -372,12 +402,21 @@ def load_parquet_ohlcv(parquet_dir: str, symbols: Optional[List[str]] = None) ->
         lows = sym_df["low"].values
         closes = sym_df["close"].values
         vols = sym_df["volume"].values
-        timestamps = sym_df["timestamp"].dt.tz_localize(None).values.astype("datetime64[us]")
+        timestamps = (
+            sym_df["timestamp"].dt.tz_localize(None).values.astype("datetime64[us]")
+        )
 
         candles = [
-            OHLCV(symbol=sym, open=float(opens[i]), high=float(highs[i]),
-                   low=float(lows[i]), close=float(closes[i]), volume=float(vols[i]),
-                   timestamp=timestamps[i].item(), is_closed=True)
+            OHLCV(
+                symbol=sym,
+                open=float(opens[i]),
+                high=float(highs[i]),
+                low=float(lows[i]),
+                close=float(closes[i]),
+                volume=float(vols[i]),
+                timestamp=timestamps[i].item(),
+                is_closed=True,
+            )
             for i in range(n)
         ]
         result[sym] = candles
@@ -388,7 +427,10 @@ def load_parquet_ohlcv(parquet_dir: str, symbols: Optional[List[str]] = None) ->
 
 # ── Dataset Building ────────────────────────────────────────────────────────
 
-def _compute_all_features(candles: List[OHLCV], extractor: FeatureExtractor) -> np.ndarray:
+
+def _compute_all_features(
+    candles: List[OHLCV], extractor: FeatureExtractor
+) -> np.ndarray:
     """Compute features for every candle using vectorized numpy.
 
     Returns: (N, n_features) array — [rsi, ema_fast, ema_slow, atr, momentum, volatility,
@@ -441,9 +483,11 @@ def _compute_all_features(candles: List[OHLCV], extractor: FeatureExtractor) -> 
     atr_p = extractor._atr_period
     tr = np.zeros(n, dtype=np.float64)
     for i in range(1, n):
-        tr[i] = max(highs[i] - lows[i],
-                     abs(highs[i] - closes[i - 1]),
-                     abs(lows[i] - closes[i - 1]))
+        tr[i] = max(
+            highs[i] - lows[i],
+            abs(highs[i] - closes[i - 1]),
+            abs(lows[i] - closes[i - 1]),
+        )
     cum_tr = np.cumsum(tr)
     atr_all = np.zeros(n, dtype=np.float64)
     for i in range(atr_p, n):
@@ -453,7 +497,7 @@ def _compute_all_features(candles: List[OHLCV], extractor: FeatureExtractor) -> 
     mom_w = extractor._momentum_window
     mom_all = np.zeros(n, dtype=np.float64)
     safe_denom = np.where(closes == 0, 1e-10, closes)
-    mom_all[mom_w:] = closes[mom_w:] / safe_denom[:n - mom_w] - 1.0
+    mom_all[mom_w:] = closes[mom_w:] / safe_denom[: n - mom_w] - 1.0
 
     # ── Volatility: std of log returns (rolling via cumsum trick) ──
     vol_w = extractor._volatility_window
@@ -462,7 +506,7 @@ def _compute_all_features(candles: List[OHLCV], extractor: FeatureExtractor) -> 
     log_ret = np.diff(log_prices)  # (n-1,)
     # Rolling mean and var via cumsum
     cum_lr = np.concatenate([[0], np.cumsum(log_ret)])
-    cum_lr2 = np.concatenate([[0], np.cumsum(log_ret ** 2)])
+    cum_lr2 = np.concatenate([[0], np.cumsum(log_ret**2)])
     vol_all = np.zeros(n, dtype=np.float64)
     for i in range(vol_w + 1, n):
         j = i - 1  # index into log_ret (length n-1, offset by 1 from closes)
@@ -487,9 +531,13 @@ def _compute_all_features(candles: List[OHLCV], extractor: FeatureExtractor) -> 
         start = vol_ratio_window + 1
         if start < n:
             idx = np.arange(start, n)
-            avg_vol = (cum_vol[idx - 1] - cum_vol[idx - 1 - vol_ratio_window]) / vol_ratio_window
+            avg_vol = (
+                cum_vol[idx - 1] - cum_vol[idx - 1 - vol_ratio_window]
+            ) / vol_ratio_window
             safe_avg = np.where(avg_vol > 1e-10, avg_vol, 1.0)
-            features[start:, 7] = np.where(avg_vol > 1e-10, volumes[start:] / safe_avg, 1.0)
+            features[start:, 7] = np.where(
+                avg_vol > 1e-10, volumes[start:] / safe_avg, 1.0
+            )
 
     # Synthetic supplementary features for training (indices 6, 8, 9)
     # In live mode these come from Binance feeds. During training we generate
@@ -545,7 +593,7 @@ def build_dataset(
     y = np.zeros((n_samples, 1), dtype=np.float32)
 
     for idx, i in enumerate(range(min_start, max_end)):
-        window = all_features[i - seq_len + 1: i + 1]  # (seq_len, n_features)
+        window = all_features[i - seq_len + 1 : i + 1]  # (seq_len, n_features)
         # Z-score normalize per window
         mean = window.mean(axis=0, keepdims=True)
         std = window.std(axis=0, keepdims=True)
@@ -566,23 +614,37 @@ def build_dataset(
     y = (y - y_mean) / y_std
 
     logger.info("Window slicing: %.1fs", time.time() - t0)
-    logger.info("Dataset shape: X=%s, y=%s | y_mean=%.4f, y_std=%.4f",
-                X.shape, y.shape, y_mean, y_std)
+    logger.info(
+        "Dataset shape: X=%s, y=%s | y_mean=%.4f, y_std=%.4f",
+        X.shape,
+        y.shape,
+        y_mean,
+        y_std,
+    )
     return X, y
 
 
 # ── Training ────────────────────────────────────────────────────────────────
 
+
 def _create_model(model_type: str, n_features: int, **kwargs) -> nn.Module:
     """Create model by type string with optional architecture overrides."""
     if model_type == "lstm":
-        lstm_kwargs = {k: v for k, v in kwargs.items()
-                       if k in ("hidden_size", "num_layers", "dropout") and v is not None}
+        lstm_kwargs = {
+            k: v
+            for k, v in kwargs.items()
+            if k in ("hidden_size", "num_layers", "dropout") and v is not None
+        }
         return LSTMAlphaModel(n_features=n_features, **lstm_kwargs)
     elif model_type == "transformer":
         from models.transformer_model import TransformerAlphaModel
-        tf_kwargs = {k: v for k, v in kwargs.items()
-                     if k in ("d_model", "nhead", "num_layers", "d_ff", "dropout") and v is not None}
+
+        tf_kwargs = {
+            k: v
+            for k, v in kwargs.items()
+            if k in ("d_model", "nhead", "num_layers", "d_ff", "dropout")
+            and v is not None
+        }
         return TransformerAlphaModel(n_features=n_features, **tf_kwargs)
     else:
         raise ValueError(f"Unknown model type: {model_type}")
@@ -629,11 +691,15 @@ def train_model(
 
     if sample_weights is not None:
         w_train = torch.from_numpy(sample_weights).float()
-        train_ds = TensorDataset(torch.from_numpy(X_train), torch.from_numpy(y_train), w_train)
+        train_ds = TensorDataset(
+            torch.from_numpy(X_train), torch.from_numpy(y_train), w_train
+        )
     else:
         # Use uniform weights
         w_train = torch.ones(len(X_train), dtype=torch.float32)
-        train_ds = TensorDataset(torch.from_numpy(X_train), torch.from_numpy(y_train), w_train)
+        train_ds = TensorDataset(
+            torch.from_numpy(X_train), torch.from_numpy(y_train), w_train
+        )
     val_ds = TensorDataset(torch.from_numpy(X_val), torch.from_numpy(y_val))
     train_dl = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
     val_dl = DataLoader(val_ds, batch_size=batch_size)
@@ -670,8 +736,13 @@ def train_model(
         model.train()
         train_loss = 0.0
         n_batches = len(train_dl)
-        pbar = tqdm(train_dl, desc=f"Epoch {epoch+1}/{epochs} [train]",
-                    leave=False, dynamic_ncols=True, mininterval=30)
+        pbar = tqdm(
+            train_dl,
+            desc=f"Epoch {epoch + 1}/{epochs} [train]",
+            leave=False,
+            dynamic_ncols=True,
+            mininterval=30,
+        )
         for xb, yb, wb in pbar:
             xb, yb, wb = xb.to(device), yb.to(device), wb.to(device)
             with torch.amp.autocast(device_type=device, enabled=use_amp):
@@ -709,14 +780,19 @@ def train_model(
                     ex_true = yb[0].item()
                     ex_input = xb[0, -1, :6].cpu().numpy()
                     feat_names = ["rsi", "ema_f", "ema_s", "atr", "mom", "vol"]
-                    feat_str = " ".join(f"{n}={v:+.2f}" for n, v in zip(feat_names, ex_input))
+                    feat_str = " ".join(
+                        f"{n}={v:+.2f}" for n, v in zip(feat_names, ex_input)
+                    )
                     val_example_logged = True
         val_loss /= len(val_ds)
 
         # Log validation example
         logger.info(
             "  sample: pred=%.4f true=%.4f err=%.4f | %s",
-            ex_pred, ex_true, abs(ex_pred - ex_true), feat_str,
+            ex_pred,
+            ex_true,
+            abs(ex_pred - ex_true),
+            feat_str,
         )
 
         scheduler.step(val_loss)
@@ -730,16 +806,25 @@ def train_model(
         marker = " *" if improved else ""
         logger.info(
             "Epoch %d/%d  train=%.4f  val=%.4f  lr=%.2e  %.1fs%s",
-            epoch + 1, epochs, train_loss, val_loss, cur_lr, epoch_dt, marker,
+            epoch + 1,
+            epochs,
+            train_loss,
+            val_loss,
+            cur_lr,
+            epoch_dt,
+            marker,
         )
 
         # wandb
-        _log_wandb({
-            "train/loss": train_loss,
-            "val/loss": val_loss,
-            "train/lr": cur_lr,
-            "train/epoch_time_s": epoch_dt,
-        }, step=epoch + 1)
+        _log_wandb(
+            {
+                "train/loss": train_loss,
+                "val/loss": val_loss,
+                "train/lr": cur_lr,
+                "train/epoch_time_s": epoch_dt,
+            },
+            step=epoch + 1,
+        )
 
         if improved:
             best_val_loss = val_loss
@@ -749,8 +834,11 @@ def train_model(
         else:
             patience_counter += 1
             if patience_counter >= early_stop_patience:
-                logger.info("Early stopping at epoch %d (no improvement for %d epochs)",
-                            epoch + 1, early_stop_patience)
+                logger.info(
+                    "Early stopping at epoch %d (no improvement for %d epochs)",
+                    epoch + 1,
+                    early_stop_patience,
+                )
                 break
 
     if best_state:
@@ -764,23 +852,27 @@ def train_model(
     logger.info("─" * 60)
     logger.info("Training complete in %.1fs (%.1fs/epoch avg)", total_time, avg_epoch)
     logger.info("Best val_loss=%.6f @ epoch %d/%d", best_val_loss, best_epoch, epochs)
-    logger.info("Device: %s | AMP: %s | Compile: %s",
-                device, use_amp, use_compile)
+    logger.info("Device: %s | AMP: %s | Compile: %s", device, use_amp, use_compile)
     logger.info("─" * 60)
 
-    _log_wandb({
-        "summary/best_val_loss": best_val_loss,
-        "summary/best_epoch": best_epoch,
-        "summary/total_time_s": total_time,
-        "summary/avg_epoch_time_s": avg_epoch,
-    })
+    _log_wandb(
+        {
+            "summary/best_val_loss": best_val_loss,
+            "summary/best_epoch": best_epoch,
+            "summary/total_time_s": total_time,
+            "summary/avg_epoch_time_s": avg_epoch,
+        }
+    )
 
     return model
 
 
 # ── ONNX Export ─────────────────────────────────────────────────────────────
 
-def export_onnx(model: LSTMAlphaModel, seq_len: int, n_features: int, path: str) -> None:
+
+def export_onnx(
+    model: LSTMAlphaModel, seq_len: int, n_features: int, path: str
+) -> None:
     """Export trained model to ONNX format."""
     # Unwrap torch.compile's OptimizedModule if present
     raw_model = getattr(model, "_orig_mod", model)
@@ -804,13 +896,19 @@ def export_onnx(model: LSTMAlphaModel, seq_len: int, n_features: int, path: str)
 
     # Verify
     import onnxruntime as ort
+
     sess = ort.InferenceSession(path, providers=["CPUExecutionProvider"])
     test_input = dummy_input.numpy()
     result = sess.run(None, {"input": test_input})
-    logger.info("ONNX verification — output shape: %s, value: %.4f", result[0].shape, result[0][0][0])
+    logger.info(
+        "ONNX verification — output shape: %s, value: %.4f",
+        result[0].shape,
+        result[0][0][0],
+    )
 
 
 # ── Main ────────────────────────────────────────────────────────────────────
+
 
 def generate_synthetic_ohlcv(
     symbol: str = "BTC/USDT",
@@ -847,75 +945,156 @@ def generate_synthetic_ohlcv(
 
         volume = base_volume * (1 + abs(rng.gauss(0, 0.5)))
 
-        candles.append(OHLCV(
-            symbol=symbol,
-            open=round(open_price, 2),
-            high=round(high_price, 2),
-            low=round(low_price, 2),
-            close=round(close_price, 2),
-            volume=round(volume, 4),
-            timestamp=base_time + timedelta(minutes=i),
-            is_closed=True,
-        ))
+        candles.append(
+            OHLCV(
+                symbol=symbol,
+                open=round(open_price, 2),
+                high=round(high_price, 2),
+                low=round(low_price, 2),
+                close=round(close_price, 2),
+                volume=round(volume, 4),
+                timestamp=base_time + timedelta(minutes=i),
+                is_closed=True,
+            )
+        )
         price = close_price
 
-    logger.info("Generated %d synthetic candles for %s (seed=%d)", n_candles, symbol, seed)
+    logger.info(
+        "Generated %d synthetic candles for %s (seed=%d)", n_candles, symbol, seed
+    )
     return candles
 
 
 # Presets for synthetic data generation
 SYNTHETIC_PRESETS = {
-    "BTC/USDT": {"start_price": 65000.0, "drift": 0.0001, "vol": 0.002, "base_volume": 50.0},
-    "ETH/USDT": {"start_price": 3500.0, "drift": 0.00015, "vol": 0.003, "base_volume": 500.0},
+    "BTC/USDT": {
+        "start_price": 65000.0,
+        "drift": 0.0001,
+        "vol": 0.002,
+        "base_volume": 50.0,
+    },
+    "ETH/USDT": {
+        "start_price": 3500.0,
+        "drift": 0.00015,
+        "vol": 0.003,
+        "base_volume": 500.0,
+    },
 }
 
 
 def main():
     setup_train_logging()
     parser = argparse.ArgumentParser(description="Train LSTM alpha model")
-    parser.add_argument("--symbols", nargs="+", default=["BTC/USDT"], help="Symbols to train on")
+    parser.add_argument(
+        "--symbols", nargs="+", default=["BTC/USDT"], help="Symbols to train on"
+    )
     parser.add_argument("--days", type=int, default=90, help="Days of history to fetch")
     parser.add_argument("--interval", default="1m", help="Candle interval")
     parser.add_argument("--seq-len", type=int, default=30, help="LSTM lookback window")
-    parser.add_argument("--forward-window", type=int, default=5, help="Forward return window for labels")
+    parser.add_argument(
+        "--forward-window", type=int, default=5, help="Forward return window for labels"
+    )
     parser.add_argument("--epochs", type=int, default=50, help="Training epochs")
     parser.add_argument("--batch-size", type=int, default=64, help="Batch size")
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
     parser.add_argument("--device", default="auto", help="Device: cpu, cuda, auto")
-    parser.add_argument("--val-split", type=float, default=0.2, help="Validation split ratio")
     parser.add_argument(
-        "--walk-forward", action="store_true",
+        "--val-split", type=float, default=0.2, help="Validation split ratio"
+    )
+    parser.add_argument(
+        "--walk-forward",
+        action="store_true",
         help="Use walk-forward validation: train 0-60%%, val 60-80%%, test 80-100%%",
     )
     parser.add_argument(
-        "--recency-half-life", type=float, default=0.0,
+        "--recency-half-life",
+        type=float,
+        default=0.0,
         help="Recency weighting half-life in days (0 = uniform weighting). E.g., 35 = recent data weighted 2x vs 35-day-old data",
     )
     parser.add_argument(
-        "--synthetic", action="store_true",
+        "--synthetic",
+        action="store_true",
         help="Use synthetic GBM data instead of fetching from exchange (no API needed)",
     )
-    parser.add_argument("--n-candles", type=int, default=10000, help="Number of synthetic candles per symbol")
-    parser.add_argument("--seed", type=int, default=42, help="Random seed for synthetic data")
-    parser.add_argument("--parquet-dir", default="", help="Load OHLCV from parquet directory (overrides --synthetic and ccxt)")
-    parser.add_argument("--model-type", default="lstm", choices=["lstm", "transformer"], help="Model architecture")
+    parser.add_argument(
+        "--n-candles",
+        type=int,
+        default=10000,
+        help="Number of synthetic candles per symbol",
+    )
+    parser.add_argument(
+        "--seed", type=int, default=42, help="Random seed for synthetic data"
+    )
+    parser.add_argument(
+        "--parquet-dir",
+        default="",
+        help="Load OHLCV from parquet directory (overrides --synthetic and ccxt)",
+    )
+    parser.add_argument(
+        "--model-type",
+        default="lstm",
+        choices=["lstm", "transformer"],
+        help="Model architecture",
+    )
     # Model architecture overrides
-    parser.add_argument("--hidden-size", type=int, default=None, help="LSTM hidden size (default: 128)")
-    parser.add_argument("--num-layers", type=int, default=None, help="Number of LSTM/Transformer layers")
-    parser.add_argument("--d-model", type=int, default=None, help="Transformer d_model dimension")
-    parser.add_argument("--nhead", type=int, default=None, help="Transformer attention heads")
-    parser.add_argument("--d-ff", type=int, default=None, help="Transformer feedforward dimension")
-    parser.add_argument("--amp", action="store_true", help="Enable automatic mixed precision (GPU recommended)")
-    parser.add_argument("--compile", action="store_true", help="Enable torch.compile (PyTorch 2.0+, GPU recommended)")
-    parser.add_argument("--resample-minutes", type=int, default=1, help="Resample candles to N-minute bars (1=no-op)")
-    parser.add_argument("--save-dataset", default="", help="Pre-build dataset and save to .npz (skip training)")
-    parser.add_argument("--load-dataset", default="", help="Load pre-built dataset from .npz (skip data parsing)")
+    parser.add_argument(
+        "--hidden-size", type=int, default=None, help="LSTM hidden size (default: 128)"
+    )
+    parser.add_argument(
+        "--num-layers", type=int, default=None, help="Number of LSTM/Transformer layers"
+    )
+    parser.add_argument(
+        "--d-model", type=int, default=None, help="Transformer d_model dimension"
+    )
+    parser.add_argument(
+        "--nhead", type=int, default=None, help="Transformer attention heads"
+    )
+    parser.add_argument(
+        "--d-ff", type=int, default=None, help="Transformer feedforward dimension"
+    )
+    parser.add_argument(
+        "--amp",
+        action="store_true",
+        help="Enable automatic mixed precision (GPU recommended)",
+    )
+    parser.add_argument(
+        "--compile",
+        action="store_true",
+        help="Enable torch.compile (PyTorch 2.0+, GPU recommended)",
+    )
+    parser.add_argument(
+        "--resample-minutes",
+        type=int,
+        default=1,
+        help="Resample candles to N-minute bars (1=no-op)",
+    )
+    parser.add_argument(
+        "--save-dataset",
+        default="",
+        help="Pre-build dataset and save to .npz (skip training)",
+    )
+    parser.add_argument(
+        "--load-dataset",
+        default="",
+        help="Load pre-built dataset from .npz (skip data parsing)",
+    )
     # wandb
-    parser.add_argument("--wandb", action="store_true", help="Enable wandb experiment tracking")
-    parser.add_argument("--wandb-entity", default="Base-Work-Space", help="wandb entity/team")
-    parser.add_argument("--wandb-project", default="trading-lstm", help="wandb project name")
-    parser.add_argument("--wandb-group", default="", help="wandb run group (auto-generated if empty)")
-    parser.add_argument("--wandb-name", default="", help="wandb run name (auto-generated if empty)")
+    parser.add_argument(
+        "--wandb", action="store_true", help="Enable wandb experiment tracking"
+    )
+    parser.add_argument(
+        "--wandb-entity", default="Base-Work-Space", help="wandb entity/team"
+    )
+    parser.add_argument(
+        "--wandb-project", default="trading-lstm", help="wandb project name"
+    )
+    parser.add_argument(
+        "--wandb-group", default="", help="wandb run group (auto-generated if empty)"
+    )
+    parser.add_argument(
+        "--wandb-name", default="", help="wandb run name (auto-generated if empty)"
+    )
     parser.add_argument("--wandb-tags", default="", help="Comma-separated wandb tags")
     args = parser.parse_args()
 
@@ -938,7 +1117,12 @@ def main():
         data = np.load(args.load_dataset)
         X_train, y_train = data["X_train"], data["y_train"]
         X_val, y_val = data["X_val"], data["y_val"]
-        logger.info("Loaded in %.1fs: Train=%d, Val=%d", time.time() - t0, len(X_train), len(X_val))
+        logger.info(
+            "Loaded in %.1fs: Train=%d, Val=%d",
+            time.time() - t0,
+            len(X_train),
+            len(X_val),
+        )
     else:
         # Build from raw data
         all_X = []
@@ -951,7 +1135,9 @@ def main():
                 if args.resample_minutes > 1:
                     candles = resample_candles(candles, args.resample_minutes)
                 logger.info("=== Processing %s (%d candles) ===", symbol, len(candles))
-                X, y = build_dataset(candles, extractor, args.seq_len, args.forward_window)
+                X, y = build_dataset(
+                    candles, extractor, args.seq_len, args.forward_window
+                )
                 all_X.append(X)
                 all_y.append(y)
         else:
@@ -977,7 +1163,9 @@ def main():
                     candles = resample_candles(candles, args.resample_minutes)
                 logger.info("Got %d candles for %s", len(candles), symbol)
 
-                X, y = build_dataset(candles, extractor, args.seq_len, args.forward_window)
+                X, y = build_dataset(
+                    candles, extractor, args.seq_len, args.forward_window
+                )
                 all_X.append(X)
                 all_y.append(y)
 
@@ -1001,7 +1189,12 @@ def main():
             y_train = np.concatenate(y_trains)
             y_val = np.concatenate(y_vals)
             y_test = np.concatenate(y_tests)
-            logger.info("Walk-forward split: Train=%d, Val=%d, Test=%d", len(X_train), len(X_val), len(X_test))
+            logger.info(
+                "Walk-forward split: Train=%d, Val=%d, Test=%d",
+                len(X_train),
+                len(X_val),
+                len(X_test),
+            )
         else:
             X_trains, X_vals = [], []
             y_trains, y_vals = [], []
@@ -1019,9 +1212,13 @@ def main():
         # Save dataset if requested
         if args.save_dataset:
             logger.info("Saving dataset to %s", args.save_dataset)
-            np.savez_compressed(args.save_dataset,
-                                X_train=X_train, y_train=y_train,
-                                X_val=X_val, y_val=y_val)
+            np.savez_compressed(
+                args.save_dataset,
+                X_train=X_train,
+                y_train=y_train,
+                X_val=X_val,
+                y_val=y_val,
+            )
             logger.info("Saved: Train=%d, Val=%d", len(X_train), len(X_val))
             return
 
@@ -1031,7 +1228,9 @@ def main():
     sample_weights = None
     if args.recency_half_life > 0:
         candles_per_day = 1440 / args.resample_minutes
-        decay_lambda = np.log(2) / (args.recency_half_life * candles_per_day)  # half-life in candle units
+        decay_lambda = np.log(2) / (
+            args.recency_half_life * candles_per_day
+        )  # half-life in candle units
         # Weight increases from oldest (index 0) to newest (index N-1)
         ages = np.arange(len(X_train), 0, -1, dtype=np.float64)  # oldest=N, newest=1
         sample_weights = np.exp(-decay_lambda * ages).astype(np.float32)
@@ -1039,7 +1238,9 @@ def main():
         sample_weights /= sample_weights.mean()
         logger.info(
             "Recency weighting: half-life=%.0f days, weight range=[%.3f, %.3f]",
-            args.recency_half_life, sample_weights.min(), sample_weights.max(),
+            args.recency_half_life,
+            sample_weights.min(),
+            sample_weights.max(),
         )
 
     # Train
@@ -1061,7 +1262,10 @@ def main():
             model_kwargs["d_ff"] = args.d_ff
 
     model = train_model(
-        X_train, y_train, X_val, y_val,
+        X_train,
+        y_train,
+        X_val,
+        y_val,
         n_features=extractor.N_FEATURES,
         epochs=args.epochs,
         batch_size=args.batch_size,
@@ -1084,9 +1288,11 @@ def main():
     onnx_path = str(ARTIFACTS_DIR / "model.onnx")
     export_onnx(model, args.seq_len, extractor.N_FEATURES, onnx_path)
 
-    _finish_wandb(summary={
-        "model_path": onnx_path,
-    })
+    _finish_wandb(
+        summary={
+            "model_path": onnx_path,
+        }
+    )
 
     logger.info("Done! Model ready at %s", onnx_path)
 

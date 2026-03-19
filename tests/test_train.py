@@ -1,19 +1,31 @@
 """Tests for models/train.py — dataset building, synthetic generation, conversions."""
+
 from __future__ import annotations
 
 import numpy as np
 import pytest
 
 from features.extractor import FeatureExtractor
-from models.train import build_dataset, generate_synthetic_ohlcv, raw_to_ohlcv, resample_candles
+from models.train import (
+    build_dataset,
+    generate_synthetic_ohlcv,
+    raw_to_ohlcv,
+    resample_candles,
+)
 
 
 @pytest.fixture
 def extractor():
-    return FeatureExtractor({
-        "rsi_period": 14, "ema_fast": 12, "ema_slow": 26,
-        "atr_period": 14, "volatility_window": 20, "momentum_window": 10,
-    })
+    return FeatureExtractor(
+        {
+            "rsi_period": 14,
+            "ema_fast": 12,
+            "ema_slow": 26,
+            "atr_period": 14,
+            "volatility_window": 20,
+            "momentum_window": 10,
+        }
+    )
 
 
 class TestRawToOhlcv:

@@ -23,9 +23,9 @@ class TestRuleBasedScore:
         fv = FeatureVector(
             symbol="BTC/USDT",
             timestamp=__import__("datetime").datetime(2025, 1, 1),
-            rsi=20.0,        # very oversold
+            rsi=20.0,  # very oversold
             ema_fast=100.0,
-            ema_slow=99.0,   # slight bullish crossover
+            ema_slow=99.0,  # slight bullish crossover
             atr=1.0,
             momentum=0.02,
             volatility=0.005,
@@ -51,8 +51,12 @@ class TestRuleBasedScore:
         base = FeatureVector(
             symbol="BTC/USDT",
             timestamp=__import__("datetime").datetime(2025, 1, 1),
-            rsi=30.0, ema_fast=101.0, ema_slow=100.0,
-            atr=1.0, momentum=0.01, volatility=0.001,
+            rsi=30.0,
+            ema_fast=101.0,
+            ema_slow=100.0,
+            atr=1.0,
+            momentum=0.01,
+            volatility=0.001,
         )
         high_vol = base.model_copy(update={"volatility": 0.1})
         score_low_vol = engine._rule_based_score(base)
@@ -95,7 +99,10 @@ class TestLSTMFallback:
 
 class TestEnsembleMode:
     def test_ensemble_averages(self, default_config, extractor):
-        config = {**default_config, "alpha": {**default_config["alpha"], "engine": "ensemble"}}
+        config = {
+            **default_config,
+            "alpha": {**default_config["alpha"], "engine": "ensemble"},
+        }
         engine = AlphaEngine(config, extractor, model=None)
         # LSTM returns 0 (no model), so ensemble = 0.5 * rule_based + 0.5 * 0
         candles = make_candle_series(60)
@@ -103,7 +110,10 @@ class TestEnsembleMode:
         assert signal.source == "ensemble"
 
     def test_unknown_engine_fallback(self, default_config, extractor):
-        config = {**default_config, "alpha": {**default_config["alpha"], "engine": "magic"}}
+        config = {
+            **default_config,
+            "alpha": {**default_config["alpha"], "engine": "magic"},
+        }
         engine = AlphaEngine(config, extractor, model=None)
         candles = make_candle_series(60)
         signal = engine.score(candles)

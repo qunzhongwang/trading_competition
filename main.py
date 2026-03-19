@@ -6,6 +6,7 @@ Usage:
     uv run python main.py --mode live             # override mode
     uv run python main.py --mode roostoo          # Roostoo competition mode
 """
+
 from __future__ import annotations
 
 import argparse
@@ -13,7 +14,6 @@ import asyncio
 import logging
 import os
 import signal
-import sys
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -91,7 +91,9 @@ def _apply_env_overrides(config: dict) -> None:
         roostoo_cfg["api_secret"] = comp_secret
         logger.info("Using competition Roostoo API credentials")
     elif comp_key or comp_secret:
-        logger.warning("ROOSTOO_COMP_API_KEY and ROOSTOO_COMP_API_SECRET must both be set; ignoring partial comp credentials")
+        logger.warning(
+            "ROOSTOO_COMP_API_KEY and ROOSTOO_COMP_API_SECRET must both be set; ignoring partial comp credentials"
+        )
         if test_key and test_secret:
             roostoo_cfg["api_key"] = test_key
             roostoo_cfg["api_secret"] = test_secret
@@ -149,7 +151,9 @@ async def main(config: dict) -> None:
         if usd_balance > 0:
             logger.info("Roostoo USD balance: $%.2f", usd_balance)
         else:
-            logger.warning("Could not fetch Roostoo balance, using config initial_capital")
+            logger.warning(
+                "Could not fetch Roostoo balance, using config initial_capital"
+            )
 
         executor = roostoo_exec
     else:
@@ -169,12 +173,15 @@ async def main(config: dict) -> None:
         model_path = alpha_cfg.get("model_path", "")
         model_type = alpha_cfg.get("model_type", "lstm")
         if model_path and Path(model_path).exists():
-            model = ModelWrapper(model_path, n_features=extractor.N_FEATURES,
-                                 model_type=model_type)
+            model = ModelWrapper(
+                model_path, n_features=extractor.N_FEATURES, model_type=model_type
+            )
             model.load()
             logger.info("Loaded %s model from %s", model_type, model_path)
         else:
-            logger.warning("Model path '%s' not found, falling back to rule_based", model_path)
+            logger.warning(
+                "Model path '%s' not found, falling back to rule_based", model_path
+            )
             config["alpha"]["engine"] = "rule_based"
 
     # 7. Portfolio tracker
@@ -206,7 +213,11 @@ async def main(config: dict) -> None:
         all_periods = sorted(set([resample_minutes] + multi_timeframes))
         multi_resampler = MultiResampler(all_periods)
         resampler = None  # multi_resampler supersedes single resampler
-        logger.info("Multi-timeframe resampler: periods=%s (primary=%d)", all_periods, multi_resampler.primary_minutes)
+        logger.info(
+            "Multi-timeframe resampler: periods=%s (primary=%d)",
+            all_periods,
+            multi_resampler.primary_minutes,
+        )
 
     # 10c. ICIR tracker (optional, for per-symbol adaptive weights)
     icir_tracker = None
@@ -219,7 +230,11 @@ async def main(config: dict) -> None:
         if icir_prior_path and Path(icir_prior_path).exists():
             with open(icir_prior_path) as f:
                 prior_weights = json.load(f)
-            logger.info("Loaded ICIR priors for %d symbols from %s", len(prior_weights), icir_prior_path)
+            logger.info(
+                "Loaded ICIR priors for %d symbols from %s",
+                len(prior_weights),
+                icir_prior_path,
+            )
 
         icir_tracker = BayesianICIRTracker(
             prior_weights=prior_weights,
@@ -229,14 +244,18 @@ async def main(config: dict) -> None:
             min_lambda=alpha_cfg.get("icir_min_lambda", 0.3),
             tau=alpha_cfg.get("icir_tau", 50.0),
         )
-        logger.info("ICIR tracker enabled: window=%d, min_samples=%d, min_lambda=%.2f",
-                     alpha_cfg.get("icir_window", 100), alpha_cfg.get("icir_min_samples", 30),
-                     alpha_cfg.get("icir_min_lambda", 0.3))
+        logger.info(
+            "ICIR tracker enabled: window=%d, min_samples=%d, min_lambda=%.2f",
+            alpha_cfg.get("icir_window", 100),
+            alpha_cfg.get("icir_min_samples", 30),
+            alpha_cfg.get("icir_min_lambda", 0.3),
+        )
 
     # 10d. Trade tracker for adaptive Kelly
     trade_tracker = None
     if config.get("strategy", {}).get("adaptive_kelly", False):
         from strategy.trade_tracker import TradeTracker
+
         strategy_cfg = config.get("strategy", {})
         trade_tracker = TradeTracker(
             window=strategy_cfg.get("kelly_window", 50),
@@ -244,7 +263,10 @@ async def main(config: dict) -> None:
             prior_win_rate=strategy_cfg.get("estimated_win_rate", 0.55),
             prior_payoff=strategy_cfg.get("estimated_payoff", 1.5),
         )
-        logger.info("Adaptive Kelly sizing enabled (window=%d)", strategy_cfg.get("kelly_window", 50))
+        logger.info(
+            "Adaptive Kelly sizing enabled (window=%d)",
+            strategy_cfg.get("kelly_window", 50),
+        )
 
     alpha_engine = AlphaEngine(config, extractor, model, icir_tracker=icir_tracker)
 
@@ -280,7 +302,8 @@ async def main(config: dict) -> None:
     supp_feed = BinanceSupplementaryFeed(config.get("symbols", []), buffer)
 
     # NAV snapshot interval for risk metrics (every 60 iterations ~= 1 hour at 1m candles)
-    NAV_SNAPSHOT_INTERVAL = 60
+    NAV_SNAPSHOT_INTERVAL = 60  # noqa: F841
+
     METRICS_LOG_INTERVAL = 120
 
     async def run_with_shutdown():
@@ -301,17 +324,25 @@ async def main(config: dict) -> None:
                     logger.info(
                         "Risk Metrics | Sharpe=%.3f | Sortino=%.3f | Calmar=%.3f | "
                         "Composite=%.3f | Return=%.2f%% | MaxDD=%.2f%%",
-                        metrics.sharpe_ratio, metrics.sortino_ratio,
-                        metrics.calmar_ratio, metrics.composite_score,
-                        metrics.total_return_pct, metrics.max_drawdown * 100,
+                        metrics.sharpe_ratio,
+                        metrics.sortino_ratio,
+                        metrics.calmar_ratio,
+                        metrics.composite_score,
+                        metrics.total_return_pct,
+                        metrics.max_drawdown * 100,
                     )
 
         nav_task = asyncio.create_task(nav_snapshot_loop())
 
         # Wait for shutdown signal or task completion
         done, pending = await asyncio.wait(
-            [feed_task, monitor_task, supp_task, nav_task,
-             asyncio.create_task(shutdown_event.wait())],
+            [
+                feed_task,
+                monitor_task,
+                supp_task,
+                nav_task,
+                asyncio.create_task(shutdown_event.wait()),
+            ],
             return_when=asyncio.FIRST_COMPLETED,
         )
 
@@ -353,7 +384,10 @@ async def main(config: dict) -> None:
             if pos.quantity > 0:
                 logger.info(
                     "  Position: %s qty=%.6f entry=%.2f current=%.2f pnl=%.2f",
-                    pos.symbol, pos.quantity, pos.entry_price, pos.current_price,
+                    pos.symbol,
+                    pos.quantity,
+                    pos.entry_price,
+                    pos.current_price,
                     pos.unrealized_pnl,
                 )
 
@@ -362,8 +396,12 @@ async def main(config: dict) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Trading Competition Framework")
-    parser.add_argument("--config", default="config/default.yaml", help="Config file path")
-    parser.add_argument("--mode", default=None, help="Override mode: paper, live, or roostoo")
+    parser.add_argument(
+        "--config", default="config/default.yaml", help="Config file path"
+    )
+    parser.add_argument(
+        "--mode", default=None, help="Override mode: paper, live, or roostoo"
+    )
     args = parser.parse_args()
 
     config = load_config(args.config)

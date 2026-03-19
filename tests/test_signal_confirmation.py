@@ -1,4 +1,5 @@
 """Tests for signal confirmation, graduated exits, and alpha decay in strategy/logic.py."""
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta
@@ -6,9 +7,6 @@ from datetime import datetime, timedelta
 import pytest
 
 from core.models import (
-    Order,
-    OrderStatus,
-    OrderType,
     Position,
     PortfolioSnapshot,
     Side,
@@ -16,14 +14,17 @@ from core.models import (
     StrategyState,
 )
 from strategy.logic import StrategyLogic
-from tests.conftest import make_filled_buy, make_signal
+from tests.conftest import make_filled_buy
 
 
 def _make_signal_now(alpha=0.7, symbol="BTC/USDT"):
     """Make a signal with a recent timestamp to avoid decay issues."""
     return Signal(
-        symbol=symbol, alpha_score=alpha, confidence=abs(alpha),
-        timestamp=datetime.utcnow(), source="rule_based",
+        symbol=symbol,
+        alpha_score=alpha,
+        confidence=abs(alpha),
+        timestamp=datetime.utcnow(),
+        source="rule_based",
     )
 
 
@@ -47,40 +48,58 @@ def config_confirm1():
 def snap_100k():
     return PortfolioSnapshot(
         timestamp=datetime(2025, 1, 1),
-        cash=100000.0, positions=[], nav=100000.0,
-        daily_pnl=0.0, peak_nav=100000.0, drawdown=0.0,
+        cash=100000.0,
+        positions=[],
+        nav=100000.0,
+        daily_pnl=0.0,
+        peak_nav=100000.0,
+        drawdown=0.0,
     )
 
 
 @pytest.fixture
 def portfolio_with_btc():
     pos = Position(
-        symbol="BTC/USDT", quantity=1.0, entry_price=100.0,
-        current_price=105.0, unrealized_pnl=5.0,
-        peak_price=107.0, state=StrategyState.HOLDING,
+        symbol="BTC/USDT",
+        quantity=1.0,
+        entry_price=100.0,
+        current_price=105.0,
+        unrealized_pnl=5.0,
+        peak_price=107.0,
+        state=StrategyState.HOLDING,
     )
     return PortfolioSnapshot(
         timestamp=datetime(2025, 1, 1),
-        cash=90000.0, positions=[pos], nav=90105.0,
-        daily_pnl=105.0, peak_nav=90107.0, drawdown=0.0,
+        cash=90000.0,
+        positions=[pos],
+        nav=90105.0,
+        daily_pnl=105.0,
+        peak_nav=90107.0,
+        drawdown=0.0,
     )
 
 
 class TestSignalConfirmation:
     def test_single_bar_no_trigger_with_confirm_2(self, config_confirm2, snap_100k):
         logic = StrategyLogic("BTC/USDT", config_confirm2)
-        order = logic.on_signal(_make_signal_now(alpha=0.8), snap_100k, current_price=100.0)
+        order = logic.on_signal(
+            _make_signal_now(alpha=0.8), snap_100k, current_price=100.0
+        )
         assert order is None
         assert logic.state == StrategyState.FLAT
 
     def test_two_consecutive_triggers(self, config_confirm2, snap_100k):
         logic = StrategyLogic("BTC/USDT", config_confirm2)
         # First bar — no trigger
-        order1 = logic.on_signal(_make_signal_now(alpha=0.8), snap_100k, current_price=100.0)
+        order1 = logic.on_signal(
+            _make_signal_now(alpha=0.8), snap_100k, current_price=100.0
+        )
         assert order1 is None
 
         # Second bar — confirmed
-        order2 = logic.on_signal(_make_signal_now(alpha=0.75), snap_100k, current_price=100.0)
+        order2 = logic.on_signal(
+            _make_signal_now(alpha=0.75), snap_100k, current_price=100.0
+        )
         assert order2 is not None
         assert order2.side == Side.BUY
         assert logic.state == StrategyState.LONG_PENDING
@@ -92,12 +111,16 @@ class TestSignalConfirmation:
         # Second bar BELOW threshold — resets
         logic.on_signal(_make_signal_now(alpha=0.3), snap_100k, current_price=100.0)
         # Third bar above threshold — only 1 consecutive, no trigger
-        order = logic.on_signal(_make_signal_now(alpha=0.8), snap_100k, current_price=100.0)
+        order = logic.on_signal(
+            _make_signal_now(alpha=0.8), snap_100k, current_price=100.0
+        )
         assert order is None
 
     def test_confirm_1_matches_old_behavior(self, config_confirm1, snap_100k):
         logic = StrategyLogic("BTC/USDT", config_confirm1)
-        order = logic.on_signal(_make_signal_now(alpha=0.8), snap_100k, current_price=100.0)
+        order = logic.on_signal(
+            _make_signal_now(alpha=0.8), snap_100k, current_price=100.0
+        )
         assert order is not None
         assert order.side == Side.BUY
 
@@ -110,7 +133,9 @@ class TestSignalConfirmation:
         assert logic.state == StrategyState.HOLDING
 
         # Single negative alpha → immediate exit
-        order = logic.on_signal(_make_signal_now(alpha=-0.5), portfolio_with_btc, current_price=100.0)
+        order = logic.on_signal(
+            _make_signal_now(alpha=-0.5), portfolio_with_btc, current_price=100.0
+        )
         assert order is not None
         assert order.side == Side.SELL
 
@@ -134,7 +159,9 @@ class TestGraduatedExits:
         logic.on_fill(make_filled_buy(price=100.0, qty=1.0))
         assert logic.state == StrategyState.HOLDING
 
-        order = logic.on_signal(_make_signal_now(alpha=-0.15), portfolio_with_btc, current_price=100.0)
+        order = logic.on_signal(
+            _make_signal_now(alpha=-0.15), portfolio_with_btc, current_price=100.0
+        )
         assert order is not None
         assert order.side == Side.SELL
         assert order.quantity == pytest.approx(0.5)
@@ -147,9 +174,13 @@ class TestGraduatedExits:
         logic.on_fill(make_filled_buy(price=100.0, qty=1.0))
 
         # Trigger tier 1
-        logic.on_signal(_make_signal_now(alpha=-0.15), portfolio_with_btc, current_price=100.0)
+        logic.on_signal(
+            _make_signal_now(alpha=-0.15), portfolio_with_btc, current_price=100.0
+        )
         # Trigger tier 2 — should sell rest
-        order = logic.on_signal(_make_signal_now(alpha=-0.35), portfolio_with_btc, current_price=100.0)
+        order = logic.on_signal(
+            _make_signal_now(alpha=-0.35), portfolio_with_btc, current_price=100.0
+        )
         assert order is not None
         assert order.side == Side.SELL
         assert logic.state == StrategyState.FLAT
@@ -163,7 +194,9 @@ class TestGraduatedExits:
         logic.on_signal(_make_signal_now(alpha=0.8), snap_100k, current_price=100.0)
         logic.on_fill(make_filled_buy(price=100.0, qty=1.0))
 
-        order = logic.on_signal(_make_signal_now(alpha=-0.5), portfolio_with_btc, current_price=100.0)
+        order = logic.on_signal(
+            _make_signal_now(alpha=-0.5), portfolio_with_btc, current_price=100.0
+        )
         assert order is not None
         assert order.side == Side.SELL
 

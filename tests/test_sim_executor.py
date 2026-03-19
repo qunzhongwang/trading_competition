@@ -24,8 +24,10 @@ class TestMarketOrders:
     async def test_buy_fills_with_slippage(self, executor, buffer):
         await buffer.push_candle(make_candle(symbol="BTC/USDT", close=100.0))
         order = Order(
-            symbol="BTC/USDT", side=Side.BUY,
-            order_type=OrderType.MARKET, quantity=1.0,
+            symbol="BTC/USDT",
+            side=Side.BUY,
+            order_type=OrderType.MARKET,
+            quantity=1.0,
         )
         result = await executor.execute(order)
         assert result.status == OrderStatus.FILLED
@@ -35,8 +37,10 @@ class TestMarketOrders:
     async def test_sell_fills_with_slippage(self, executor, buffer):
         await buffer.push_candle(make_candle(symbol="BTC/USDT", close=100.0))
         order = Order(
-            symbol="BTC/USDT", side=Side.SELL,
-            order_type=OrderType.MARKET, quantity=1.0,
+            symbol="BTC/USDT",
+            side=Side.SELL,
+            order_type=OrderType.MARKET,
+            quantity=1.0,
         )
         result = await executor.execute(order)
         assert result.status == OrderStatus.FILLED
@@ -44,8 +48,10 @@ class TestMarketOrders:
 
     async def test_no_price_data_rejects(self, executor, buffer):
         order = Order(
-            symbol="XRP/USDT", side=Side.BUY,
-            order_type=OrderType.MARKET, quantity=1.0,
+            symbol="XRP/USDT",
+            side=Side.BUY,
+            order_type=OrderType.MARKET,
+            quantity=1.0,
         )
         result = await executor.execute(order)
         assert result.status == OrderStatus.REJECTED
@@ -56,8 +62,11 @@ class TestLimitOrders:
     async def test_limit_buy_fills_when_price_below(self, executor, buffer):
         await buffer.push_candle(make_candle(symbol="BTC/USDT", close=95.0))
         order = Order(
-            symbol="BTC/USDT", side=Side.BUY,
-            order_type=OrderType.LIMIT, quantity=1.0, price=100.0,
+            symbol="BTC/USDT",
+            side=Side.BUY,
+            order_type=OrderType.LIMIT,
+            quantity=1.0,
+            price=100.0,
         )
         result = await executor.execute(order)
         assert result.status == OrderStatus.FILLED
@@ -66,8 +75,11 @@ class TestLimitOrders:
     async def test_limit_buy_pending_when_above(self, executor, buffer):
         await buffer.push_candle(make_candle(symbol="BTC/USDT", close=105.0))
         order = Order(
-            symbol="BTC/USDT", side=Side.BUY,
-            order_type=OrderType.LIMIT, quantity=1.0, price=100.0,
+            symbol="BTC/USDT",
+            side=Side.BUY,
+            order_type=OrderType.LIMIT,
+            quantity=1.0,
+            price=100.0,
         )
         result = await executor.execute(order)
         assert result.status == OrderStatus.SUBMITTED
@@ -75,8 +87,11 @@ class TestLimitOrders:
     async def test_limit_sell_fills_when_price_above(self, executor, buffer):
         await buffer.push_candle(make_candle(symbol="BTC/USDT", close=110.0))
         order = Order(
-            symbol="BTC/USDT", side=Side.SELL,
-            order_type=OrderType.LIMIT, quantity=1.0, price=100.0,
+            symbol="BTC/USDT",
+            side=Side.SELL,
+            order_type=OrderType.LIMIT,
+            quantity=1.0,
+            price=100.0,
         )
         result = await executor.execute(order)
         assert result.status == OrderStatus.FILLED
@@ -84,8 +99,11 @@ class TestLimitOrders:
     async def test_limit_sell_pending_when_below(self, executor, buffer):
         await buffer.push_candle(make_candle(symbol="BTC/USDT", close=90.0))
         order = Order(
-            symbol="BTC/USDT", side=Side.SELL,
-            order_type=OrderType.LIMIT, quantity=1.0, price=100.0,
+            symbol="BTC/USDT",
+            side=Side.SELL,
+            order_type=OrderType.LIMIT,
+            quantity=1.0,
+            price=100.0,
         )
         result = await executor.execute(order)
         assert result.status == OrderStatus.SUBMITTED
@@ -96,8 +114,11 @@ class TestCancel:
     async def test_cancel_pending(self, executor, buffer):
         await buffer.push_candle(make_candle(symbol="BTC/USDT", close=105.0))
         order = Order(
-            symbol="BTC/USDT", side=Side.BUY,
-            order_type=OrderType.LIMIT, quantity=1.0, price=100.0,
+            symbol="BTC/USDT",
+            side=Side.BUY,
+            order_type=OrderType.LIMIT,
+            quantity=1.0,
+            price=100.0,
         )
         submitted = await executor.execute(order)
         assert submitted.status == OrderStatus.SUBMITTED

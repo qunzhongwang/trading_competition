@@ -5,6 +5,7 @@ alpha factors (RSI, momentum, EMA, volatility). Offline priors are
 loaded from a JSON file; during the competition, Bayesian shrinkage
 continuously adapts toward online observations.
 """
+
 from __future__ import annotations
 
 import logging
@@ -21,8 +22,15 @@ DEFAULT_WEIGHTS = [0.3, 0.3, 0.3, 0.1]
 class _SymbolICIR:
     """Tracks rolling IC for a single symbol's factors."""
 
-    def __init__(self, prior: List[float], window: int, min_samples: int,
-                 min_lambda: float, tau: float, n_factors: int):
+    def __init__(
+        self,
+        prior: List[float],
+        window: int,
+        min_samples: int,
+        min_lambda: float,
+        tau: float,
+        n_factors: int,
+    ):
         self._prior = list(prior)
         self._window = window
         self._min_samples = min_samples
@@ -57,8 +65,7 @@ class _SymbolICIR:
 
         # Blend: lambda * prior + (1 - lambda) * online
         weights = [
-            lam * p + (1.0 - lam) * o
-            for p, o in zip(self._prior, online_weights)
+            lam * p + (1.0 - lam) * o for p, o in zip(self._prior, online_weights)
         ]
 
         # Normalize to sum to 1 (absolute values, since vol is a penalty)
@@ -138,7 +145,9 @@ class BayesianICIRTracker:
             )
         return self._trackers[symbol]
 
-    def record(self, symbol: str, factor_scores: List[float], forward_return: float) -> None:
+    def record(
+        self, symbol: str, factor_scores: List[float], forward_return: float
+    ) -> None:
         """Record one observation for a specific symbol."""
         self._get_tracker(symbol).record(factor_scores, forward_return)
 

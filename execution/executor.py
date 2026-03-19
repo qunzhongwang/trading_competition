@@ -40,11 +40,13 @@ class LiveExecutor(BaseExecutor):
         import ccxt.async_support as ccxt_async
 
         exchange_class = getattr(ccxt_async, self._exchange_name)
-        self._exchange = exchange_class({
-            "apiKey": self._api_key,
-            "secret": self._api_secret,
-            "enableRateLimit": True,
-        })
+        self._exchange = exchange_class(
+            {
+                "apiKey": self._api_key,
+                "secret": self._api_secret,
+                "enableRateLimit": True,
+            }
+        )
         logger.info("LiveExecutor connected to %s", self._exchange_name)
 
     async def stop(self) -> None:
@@ -77,7 +79,10 @@ class LiveExecutor(BaseExecutor):
 
             logger.info(
                 "Live order filled: %s %s %.6f @ %.2f",
-                order.side.value, order.symbol, order.filled_quantity, order.filled_price,
+                order.side.value,
+                order.symbol,
+                order.filled_quantity,
+                order.filled_price,
             )
 
         except Exception as e:
@@ -92,7 +97,13 @@ class LiveExecutor(BaseExecutor):
             logger.info("Cancelled order %s", order_id)
         except Exception as e:
             logger.error("Cancel failed: %s", e)
-        return Order(order_id=order_id, symbol=symbol, side="BUY", order_type="MARKET", quantity=0)
+        return Order(
+            order_id=order_id,
+            symbol=symbol,
+            side="BUY",
+            order_type="MARKET",
+            quantity=0,
+        )
 
     async def get_status(self, order_id: str, symbol: str) -> Order:
         result = await self._exchange.fetch_order(order_id, symbol)
@@ -103,5 +114,7 @@ class LiveExecutor(BaseExecutor):
             order_type=result["type"].upper(),
             quantity=float(result["amount"]),
             filled_quantity=float(result.get("filled", 0)),
-            filled_price=float(result.get("average", 0)) if result.get("average") else None,
+            filled_price=float(result.get("average", 0))
+            if result.get("average")
+            else None,
         )

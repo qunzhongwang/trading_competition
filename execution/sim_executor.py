@@ -48,16 +48,27 @@ class SimExecutor(BaseExecutor):
 
             logger.info(
                 "SIM %s %s qty=%.6f @ %.2f (market=%.2f, slip=%.1fbps)",
-                order.side.value, order.symbol,
-                order.filled_quantity, order.filled_price,
-                price, self._slippage_bps,
+                order.side.value,
+                order.symbol,
+                order.filled_quantity,
+                order.filled_price,
+                price,
+                self._slippage_bps,
             )
 
         elif order.order_type == OrderType.LIMIT:
             can_fill = False
-            if order.side == Side.BUY and order.price is not None and price <= order.price:
+            if (
+                order.side == Side.BUY
+                and order.price is not None
+                and price <= order.price
+            ):
                 can_fill = True
-            elif order.side == Side.SELL and order.price is not None and price >= order.price:
+            elif (
+                order.side == Side.SELL
+                and order.price is not None
+                and price >= order.price
+            ):
                 can_fill = True
 
             if can_fill:
@@ -67,16 +78,21 @@ class SimExecutor(BaseExecutor):
                 order.status = OrderStatus.FILLED
                 logger.info(
                     "SIM LIMIT %s %s qty=%.6f @ %.2f",
-                    order.side.value, order.symbol,
-                    order.filled_quantity, order.filled_price,
+                    order.side.value,
+                    order.symbol,
+                    order.filled_quantity,
+                    order.filled_price,
                 )
             else:
                 order.status = OrderStatus.SUBMITTED
                 self._pending_orders[order.order_id] = order
                 logger.info(
                     "SIM LIMIT pending: %s %s qty=%.6f limit=%.2f (market=%.2f)",
-                    order.side.value, order.symbol,
-                    order.quantity, order.price, price,
+                    order.side.value,
+                    order.symbol,
+                    order.quantity,
+                    order.price,
+                    price,
                 )
 
         return order
@@ -88,18 +104,24 @@ class SimExecutor(BaseExecutor):
             logger.info("SIM cancelled order %s", order_id)
             return order
         return Order(
-            order_id=order_id, symbol=symbol,
-            side=Side.BUY, order_type=OrderType.MARKET,
-            quantity=0, status=OrderStatus.CANCELLED,
+            order_id=order_id,
+            symbol=symbol,
+            side=Side.BUY,
+            order_type=OrderType.MARKET,
+            quantity=0,
+            status=OrderStatus.CANCELLED,
         )
 
     async def get_status(self, order_id: str, symbol: str) -> Order:
         order = self._pending_orders.get(order_id)
         if order is None:
             return Order(
-                order_id=order_id, symbol=symbol,
-                side=Side.BUY, order_type=OrderType.MARKET,
-                quantity=0, status=OrderStatus.CANCELLED,
+                order_id=order_id,
+                symbol=symbol,
+                side=Side.BUY,
+                order_type=OrderType.MARKET,
+                quantity=0,
+                status=OrderStatus.CANCELLED,
             )
 
         # Recheck current price against limit price
@@ -107,9 +129,17 @@ class SimExecutor(BaseExecutor):
         if candle is not None:
             price = candle.close
             can_fill = False
-            if order.side == Side.BUY and order.price is not None and price <= order.price:
+            if (
+                order.side == Side.BUY
+                and order.price is not None
+                and price <= order.price
+            ):
                 can_fill = True
-            elif order.side == Side.SELL and order.price is not None and price >= order.price:
+            elif (
+                order.side == Side.SELL
+                and order.price is not None
+                and price >= order.price
+            ):
                 can_fill = True
 
             if can_fill:
@@ -120,8 +150,11 @@ class SimExecutor(BaseExecutor):
                 self._pending_orders.pop(order_id, None)
                 logger.info(
                     "SIM LIMIT filled on recheck: %s %s qty=%.6f @ %.2f (market=%.2f)",
-                    order.side.value, order.symbol,
-                    order.filled_quantity, order.filled_price, price,
+                    order.side.value,
+                    order.symbol,
+                    order.filled_quantity,
+                    order.filled_price,
+                    price,
                 )
 
         return order

@@ -21,7 +21,9 @@ class RiskShield:
 
     def __init__(self, config: dict):
         risk_cfg = config.get("risk", {})
-        self._max_portfolio_exposure: float = risk_cfg.get("max_portfolio_exposure", 0.50)
+        self._max_portfolio_exposure: float = risk_cfg.get(
+            "max_portfolio_exposure", 0.50
+        )
         self._max_single_exposure: float = risk_cfg.get("max_single_exposure", 0.15)
         self._trailing_stop_pct: float = risk_cfg.get("trailing_stop_pct", 0.03)
         self._atr_stop_multiplier: float = risk_cfg.get("atr_stop_multiplier", 2.0)
@@ -35,7 +37,9 @@ class RiskShield:
     def circuit_breaker_active(self) -> bool:
         return self._circuit_breaker_active
 
-    def validate(self, order: Order, tracker: PortfolioTracker, is_stop: bool = False) -> Optional[Order]:
+    def validate(
+        self, order: Order, tracker: PortfolioTracker, is_stop: bool = False
+    ) -> Optional[Order]:
         """Pre-trade validation. Returns order (possibly adjusted) or None if rejected.
 
         Args:
@@ -56,7 +60,8 @@ class RiskShield:
             if pos.quantity < order.quantity:
                 logger.warning(
                     "ADJUSTED: sell qty %.6f > position %.6f, clamping",
-                    order.quantity, pos.quantity,
+                    order.quantity,
+                    pos.quantity,
                 )
                 order.quantity = pos.quantity
             if order.quantity <= 0:
@@ -70,7 +75,10 @@ class RiskShield:
             while self._order_timestamps and self._order_timestamps[0] < now - 60:
                 self._order_timestamps.popleft()
             if len(self._order_timestamps) >= self._max_orders_per_minute:
-                logger.warning("REJECTED: rate limit exceeded (%d/min)", self._max_orders_per_minute)
+                logger.warning(
+                    "REJECTED: rate limit exceeded (%d/min)",
+                    self._max_orders_per_minute,
+                )
                 return None
             self._order_timestamps.append(now)
 
@@ -86,34 +94,58 @@ class RiskShield:
 
             # Single exposure check
             current_exposure = tracker.get_exposure(order.symbol)
-            new_single_exposure = current_exposure + (order_value / snapshot.nav if snapshot.nav > 0 else 1.0)
+            new_single_exposure = current_exposure + (
+                order_value / snapshot.nav if snapshot.nav > 0 else 1.0
+            )
             if new_single_exposure > self._max_single_exposure:
-                max_value = (self._max_single_exposure - current_exposure) * snapshot.nav
+                max_value = (
+                    self._max_single_exposure - current_exposure
+                ) * snapshot.nav
                 if max_value <= 0:
-                    logger.warning("REJECTED: single exposure limit (%.1f%%)", current_exposure * 100)
+                    logger.warning(
+                        "REJECTED: single exposure limit (%.1f%%)",
+                        current_exposure * 100,
+                    )
                     return None
                 order.quantity = max_value / price
-                logger.info("ADJUSTED: clamped to single exposure limit, qty=%.6f", order.quantity)
+                logger.info(
+                    "ADJUSTED: clamped to single exposure limit, qty=%.6f",
+                    order.quantity,
+                )
 
             # Portfolio exposure check
             total_exposure = tracker.get_total_exposure()
-            new_total = total_exposure + (order_value / snapshot.nav if snapshot.nav > 0 else 1.0)
+            new_total = total_exposure + (
+                order_value / snapshot.nav if snapshot.nav > 0 else 1.0
+            )
             if new_total > self._max_portfolio_exposure:
-                max_value = (self._max_portfolio_exposure - total_exposure) * snapshot.nav
+                max_value = (
+                    self._max_portfolio_exposure - total_exposure
+                ) * snapshot.nav
                 if max_value <= 0:
-                    logger.warning("REJECTED: portfolio exposure limit (%.1f%%)", total_exposure * 100)
+                    logger.warning(
+                        "REJECTED: portfolio exposure limit (%.1f%%)",
+                        total_exposure * 100,
+                    )
                     return None
                 order.quantity = min(order.quantity, max_value / price)
-                logger.info("ADJUSTED: clamped to portfolio exposure limit, qty=%.6f", order.quantity)
+                logger.info(
+                    "ADJUSTED: clamped to portfolio exposure limit, qty=%.6f",
+                    order.quantity,
+                )
 
             # Cash check
             total_cost = price * order.quantity * 1.001  # include rough fee estimate
             if total_cost > snapshot.cash:
-                order.quantity = (snapshot.cash * 0.999) / price  # leave margin for fees
+                order.quantity = (
+                    snapshot.cash * 0.999
+                ) / price  # leave margin for fees
                 if order.quantity <= 0:
                     logger.warning("REJECTED: insufficient cash (%.2f)", snapshot.cash)
                     return None
-                logger.info("ADJUSTED: clamped to available cash, qty=%.6f", order.quantity)
+                logger.info(
+                    "ADJUSTED: clamped to available cash, qty=%.6f", order.quantity
+                )
 
         return order
 
@@ -158,13 +190,17 @@ class RiskShield:
                     reason = f"ATR stop (entry={pos.entry_price:.2f}, atr={atr:.2f}, stop={atr_stop_price:.2f})"
 
             if triggered:
-                logger.warning("STOP triggered for %s: %s @ %.2f", symbol, reason, current_price)
-                orders.append(Order(
-                    symbol=symbol,
-                    side=Side.SELL,
-                    order_type=OrderType.MARKET,
-                    quantity=pos.quantity,
-                ))
+                logger.warning(
+                    "STOP triggered for %s: %s @ %.2f", symbol, reason, current_price
+                )
+                orders.append(
+                    Order(
+                        symbol=symbol,
+                        side=Side.SELL,
+                        order_type=OrderType.MARKET,
+                        quantity=pos.quantity,
+                    )
+                )
 
         return orders
 

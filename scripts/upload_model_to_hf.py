@@ -19,6 +19,7 @@ Examples::
   python scripts/upload_model_to_hf.py --repo-id user/my-model --model-dir ./my_artifacts --seq-len 60
   python scripts/upload_model_to_hf.py --repo-id user/my-model --config training_meta.json
 """
+
 from __future__ import annotations
 
 import argparse
@@ -66,8 +67,14 @@ def _load_json(path: Path) -> dict:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--repo-id", required=True, help="Hugging Face model repo, e.g. username/my-lstm")
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "--repo-id",
+        required=True,
+        help="Hugging Face model repo, e.g. username/my-lstm",
+    )
     parser.add_argument(
         "--model-dir",
         default="artifacts",
@@ -79,11 +86,17 @@ def main() -> None:
         type=Path,
         help="JSON file merged into Hub config (n_features, hidden_size, num_layers, dropout, seq_len, ...)",
     )
-    parser.add_argument("--n-features", type=int, help="Override inferred / default feature count")
+    parser.add_argument(
+        "--n-features", type=int, help="Override inferred / default feature count"
+    )
     parser.add_argument("--hidden-size", type=int)
     parser.add_argument("--num-layers", type=int)
     parser.add_argument("--dropout", type=float)
-    parser.add_argument("--seq-len", type=int, help="Stored in config.json for consumers (inference shape)")
+    parser.add_argument(
+        "--seq-len",
+        type=int,
+        help="Stored in config.json for consumers (inference shape)",
+    )
     parser.add_argument(
         "--force-safetensors",
         action="store_true",
@@ -99,7 +112,10 @@ def main() -> None:
     model_dir = args.model_dir.resolve()
     pt_path = model_dir / "model.pt"
     if not pt_path.is_file():
-        print(f"Error: {pt_path} not found. Train or copy checkpoint there first.", file=sys.stderr)
+        print(
+            f"Error: {pt_path} not found. Train or copy checkpoint there first.",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     import torch

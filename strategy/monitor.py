@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import asyncio
 import logging
-from typing import Dict, List, Optional, Set
+from typing import Dict, Optional, Set
 
 from core.models import OHLCV, Order, OrderStatus, StrategyState
 from data.buffer import LiveBuffer
@@ -70,7 +69,9 @@ class StrategyMonitor:
         self._order_manager.register_fill_callback(self._on_order_event)
 
         # Min candles before we start trading
-        self._warmup_candles = extractor.min_candles + config.get("alpha", {}).get("seq_len", 30)
+        self._warmup_candles = extractor.min_candles + config.get("alpha", {}).get(
+            "seq_len", 30
+        )
 
         # ICIR tracking: store previous factors per symbol for online learning
         self._prev_factors: Dict[str, list] = {}
@@ -144,7 +145,9 @@ class StrategyMonitor:
                 if iteration % 50 == 1:
                     logger.info(
                         "[%s] warming up: %d/%d candles",
-                        symbol, len(candles), self._warmup_candles,
+                        symbol,
+                        len(candles),
+                        self._warmup_candles,
                     )
                 continue
 
@@ -162,39 +165,60 @@ class StrategyMonitor:
                 prev_price = self._prev_prices.get(symbol, 0.0)
                 if prev_price > 0:
                     realized_return = (candles[-1].close - prev_price) / prev_price
-                    self._icir_tracker.record(symbol, self._prev_factors[symbol], realized_return)
+                    self._icir_tracker.record(
+                        symbol, self._prev_factors[symbol], realized_return
+                    )
 
             # Store current factors for ICIR next iteration
             if self._icir_tracker is not None:
                 self._prev_factors[symbol] = [
                     (50.0 - features.rsi) / 50.0,
                     max(-1.0, min(1.0, features.momentum * 20.0)),
-                    max(-1.0, min(1.0, (features.ema_fast - features.ema_slow) / features.ema_slow * 100.0)) if features.ema_slow > 0 else 0.0,
+                    max(
+                        -1.0,
+                        min(
+                            1.0,
+                            (features.ema_fast - features.ema_slow)
+                            / features.ema_slow
+                            * 100.0,
+                        ),
+                    )
+                    if features.ema_slow > 0
+                    else 0.0,
                     min(1.0, features.volatility * 50.0),
                 ]
                 self._prev_prices[symbol] = candles[-1].close
 
             supplementary_history = await self._buffer.get_supplementary_history(
-                symbol, self._alpha_engine._seq_len)
+                symbol, self._alpha_engine._seq_len
+            )
 
             # Fetch higher-TF candles for multi-TF filter
             candles_15m = None
             candles_1h = None
             if self._multi_timeframes:
                 if 15 in self._multi_timeframes:
-                    candles_15m = await self._buffer.get_resampled_candles(symbol, 15, n=50)
+                    candles_15m = await self._buffer.get_resampled_candles(
+                        symbol, 15, n=50
+                    )
                 if 60 in self._multi_timeframes:
-                    candles_1h = await self._buffer.get_resampled_candles(symbol, 60, n=50)
+                    candles_1h = await self._buffer.get_resampled_candles(
+                        symbol, 60, n=50
+                    )
 
             signal = self._alpha_engine.score(
-                candles, supplementary=supplementary,
+                candles,
+                supplementary=supplementary,
                 supplementary_history=supplementary_history,
-                candles_15m=candles_15m, candles_1h=candles_1h,
+                candles_15m=candles_15m,
+                candles_1h=candles_1h,
             )
 
             # ── Strategy Decision ──
             snapshot = self._tracker.snapshot()
-            order = strategy.on_signal(signal, snapshot, current_price=candles[-1].close)
+            order = strategy.on_signal(
+                signal, snapshot, current_price=candles[-1].close
+            )
 
             if order is not None:
                 # ── Risk Validation ──
@@ -207,9 +231,13 @@ class StrategyMonitor:
 
         # ── Post-trade Risk Checks ──
         # Trailing stops and ATR stops
-        stop_orders = self._risk_shield.check_stops(self._tracker, latest_candles, atr_values)
+        stop_orders = self._risk_shield.check_stops(
+            self._tracker, latest_candles, atr_values
+        )
         for stop_order in stop_orders:
-            validated = self._risk_shield.validate(stop_order, self._tracker, is_stop=True)
+            validated = self._risk_shield.validate(
+                stop_order, self._tracker, is_stop=True
+            )
             if validated is not None:
                 await self._order_manager.submit(validated)
                 # Update strategy state
@@ -230,8 +258,12 @@ class StrategyMonitor:
             ]
             logger.info(
                 "Iter %d | NAV=%.2f | Cash=%.2f | PnL=%.2f | DD=%.2f%% | Holdings=%s",
-                iteration, snap.nav, snap.cash, snap.daily_pnl,
-                snap.drawdown * 100, holdings or "none",
+                iteration,
+                snap.nav,
+                snap.cash,
+                snap.daily_pnl,
+                snap.drawdown * 100,
+                holdings or "none",
             )
 
     async def _liquidate_all(self) -> None:

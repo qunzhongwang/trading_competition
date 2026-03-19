@@ -47,10 +47,14 @@ class AlphaEngine:
         # Alpha decay config
         self._decay_half_life_s: float = alpha_cfg.get("decay_half_life_s", 999999)
 
-    def score(self, candles: List[OHLCV], supplementary: Optional[dict] = None,
-              supplementary_history: Optional[dict] = None,
-              candles_15m: Optional[List[OHLCV]] = None,
-              candles_1h: Optional[List[OHLCV]] = None) -> Signal:
+    def score(
+        self,
+        candles: List[OHLCV],
+        supplementary: Optional[dict] = None,
+        supplementary_history: Optional[dict] = None,
+        candles_15m: Optional[List[OHLCV]] = None,
+        candles_1h: Optional[List[OHLCV]] = None,
+    ) -> Signal:
         """Generate alpha signal from candle history."""
         t0 = time.perf_counter()
         features = self._extractor.extract(candles, supplementary=supplementary)
@@ -63,11 +67,16 @@ class AlphaEngine:
             source = self._engine_type
         elif self._engine_type == "ensemble":
             rule_alpha = self._rule_based_score(features)
-            model_alpha = self._model_score(candles, supplementary, supplementary_history)
+            model_alpha = self._model_score(
+                candles, supplementary, supplementary_history
+            )
             alpha = 0.5 * rule_alpha + 0.5 * model_alpha
             source = "ensemble"
         else:
-            logger.warning("Unknown engine type '%s', falling back to rule_based", self._engine_type)
+            logger.warning(
+                "Unknown engine type '%s', falling back to rule_based",
+                self._engine_type,
+            )
             alpha = self._rule_based_score(features)
             source = "rule_based"
 
@@ -83,7 +92,10 @@ class AlphaEngine:
                 if abs(old_alpha - alpha) > 0.01:
                     logger.debug(
                         "multi-TF filter %.3f: alpha %.4f → %.4f (%s)",
-                        tf_filter, old_alpha, alpha, features.symbol,
+                        tf_filter,
+                        old_alpha,
+                        alpha,
+                        features.symbol,
                     )
 
         # Clamp to [-1, 1]
@@ -139,8 +151,9 @@ class AlphaEngine:
 
         return alpha
 
-    def _multi_tf_filter(self, candles_15m: Optional[List[OHLCV]],
-                         candles_1h: Optional[List[OHLCV]]) -> float:
+    def _multi_tf_filter(
+        self, candles_15m: Optional[List[OHLCV]], candles_1h: Optional[List[OHLCV]]
+    ) -> float:
         """Compute multi-timeframe trend filter from 15m and 1h bars.
 
         Returns a value in [-1, 1]:
@@ -181,16 +194,23 @@ class AlphaEngine:
             ema = (v - ema) * multiplier + ema
         return ema
 
-    def _model_score(self, candles: List[OHLCV], supplementary: Optional[dict] = None,
-                     supplementary_history: Optional[dict] = None) -> float:
+    def _model_score(
+        self,
+        candles: List[OHLCV],
+        supplementary: Optional[dict] = None,
+        supplementary_history: Optional[dict] = None,
+    ) -> float:
         """Run neural model (LSTM or Transformer) inference on feature sequence."""
         if self._model is None or not self._model.is_loaded:
             logger.warning("Model not loaded, returning 0.0")
             return 0.0
 
-        seq = self._extractor.extract_sequence(candles, seq_len=self._seq_len,
-                                               supplementary=supplementary,
-                                               supplementary_history=supplementary_history)
+        seq = self._extractor.extract_sequence(
+            candles,
+            seq_len=self._seq_len,
+            supplementary=supplementary,
+            supplementary_history=supplementary_history,
+        )
         return self._model.predict(seq)
 
     @property

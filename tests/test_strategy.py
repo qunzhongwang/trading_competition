@@ -6,13 +6,12 @@ from core.models import (
     Order,
     OrderStatus,
     OrderType,
-    Position,
     PortfolioSnapshot,
     Side,
     StrategyState,
 )
 from strategy.logic import StrategyLogic
-from tests.conftest import make_filled_buy, make_filled_sell, make_signal
+from tests.conftest import make_filled_buy, make_signal
 
 
 @pytest.fixture
@@ -71,8 +70,10 @@ class TestLongPendingState:
     def test_cancel_returns_to_flat(self, logic, snap_100k):
         logic.on_signal(make_signal(alpha=0.8), snap_100k, current_price=100.0)
         cancel = Order(
-            symbol="BTC/USDT", side=Side.BUY,
-            order_type=OrderType.MARKET, quantity=10.0,
+            symbol="BTC/USDT",
+            side=Side.BUY,
+            order_type=OrderType.MARKET,
+            quantity=10.0,
             status=OrderStatus.CANCELLED,
         )
         logic.on_cancel(cancel)
@@ -93,14 +94,18 @@ class TestHoldingState:
         assert order.side == Side.SELL
         assert logic.state == StrategyState.FLAT
 
-    def test_no_sell_above_exit_threshold(self, logic, snap_100k, portfolio_with_position):
+    def test_no_sell_above_exit_threshold(
+        self, logic, snap_100k, portfolio_with_position
+    ):
         self._enter_holding(logic, snap_100k)
         signal = make_signal(alpha=0.0)  # above exit threshold -0.2
         order = logic.on_signal(signal, portfolio_with_position, current_price=100.0)
         assert order is None
         assert logic.state == StrategyState.HOLDING
 
-    def test_sell_quantity_matches_position(self, logic, snap_100k, portfolio_with_position):
+    def test_sell_quantity_matches_position(
+        self, logic, snap_100k, portfolio_with_position
+    ):
         self._enter_holding(logic, snap_100k)
         signal = make_signal(alpha=-0.5)
         order = logic.on_signal(signal, portfolio_with_position, current_price=100.0)
@@ -143,8 +148,12 @@ class TestPositionSizing:
         logic = StrategyLogic("BTC/USDT", config)
         snap = PortfolioSnapshot(
             timestamp=__import__("datetime").datetime(2025, 1, 1),
-            cash=5000.0, positions=[], nav=100000.0,
-            daily_pnl=0.0, peak_nav=100000.0, drawdown=0.0,
+            cash=5000.0,
+            positions=[],
+            nav=100000.0,
+            daily_pnl=0.0,
+            peak_nav=100000.0,
+            drawdown=0.0,
         )
         order = logic.on_signal(make_signal(alpha=0.8), snap, current_price=100.0)
         # 50% of 100k = 50000, but cash only 5000*0.99 = 4950
@@ -161,8 +170,10 @@ class TestWrongSymbol:
     def test_cancel_wrong_symbol_ignored(self, logic, snap_100k):
         logic.on_signal(make_signal(alpha=0.8), snap_100k, current_price=100.0)
         cancel = Order(
-            symbol="ETH/USDT", side=Side.BUY,
-            order_type=OrderType.MARKET, quantity=10.0,
+            symbol="ETH/USDT",
+            side=Side.BUY,
+            order_type=OrderType.MARKET,
+            quantity=10.0,
             status=OrderStatus.CANCELLED,
         )
         logic.on_cancel(cancel)

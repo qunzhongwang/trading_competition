@@ -140,10 +140,14 @@ class LiveBuffer:
             if minutes not in self._resampled:
                 self._resampled[minutes] = {}
             if candle.symbol not in self._resampled[minutes]:
-                self._resampled[minutes][candle.symbol] = deque(maxlen=self._max_candles)
+                self._resampled[minutes][candle.symbol] = deque(
+                    maxlen=self._max_candles
+                )
             self._resampled[minutes][candle.symbol].append(candle)
 
-    async def get_resampled_candles(self, symbol: str, minutes: int, n: int = 50) -> List[OHLCV]:
+    async def get_resampled_candles(
+        self, symbol: str, minutes: int, n: int = 50
+    ) -> List[OHLCV]:
         """Return last n resampled candles for a symbol at given timeframe."""
         async with self._lock:
             buf = self._resampled.get(minutes, {}).get(symbol, deque())

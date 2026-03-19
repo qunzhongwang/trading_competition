@@ -93,7 +93,9 @@ class LSTMAlphaModel(nn.Module):
         root.mkdir(parents=True, exist_ok=True)
 
         cfg = {**self.hf_config(), **(extra_config or {})}
-        (root / "config.json").write_text(json.dumps(cfg, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        (root / "config.json").write_text(
+            json.dumps(cfg, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
 
         st_path = root / "model.safetensors"
         if force_safetensors or not st_path.exists():

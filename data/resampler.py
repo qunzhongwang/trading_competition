@@ -4,6 +4,7 @@ Used during live/paper trading to gate alpha scoring on completed
 N-minute bars while still processing 1-min candles for price updates
 and stop checks.
 """
+
 from __future__ import annotations
 
 import logging

@@ -2,7 +2,7 @@
 
 import pytest
 
-from core.models import OrderStatus, StrategyState
+from core.models import StrategyState
 from risk.tracker import PortfolioTracker
 from tests.conftest import make_filled_buy, make_filled_sell
 

@@ -1,12 +1,13 @@
 """Integration tests — full pipeline from feed → strategy → execution."""
+
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 import pytest
 
-from core.models import OHLCV, OrderStatus, StrategyState
+from core.models import OHLCV
 from data.buffer import LiveBuffer
 from execution.order_manager import OrderManager
 from execution.sim_executor import SimExecutor
@@ -25,8 +26,12 @@ def _fast_config(entry_threshold: float = 0.15):
         "symbols": ["BTC/USDT"],
         "data": {"buffer_size": 500, "candle_interval": "1m"},
         "features": {
-            "rsi_period": 14, "ema_fast": 12, "ema_slow": 26,
-            "atr_period": 14, "volatility_window": 20, "momentum_window": 10,
+            "rsi_period": 14,
+            "ema_fast": 12,
+            "ema_slow": 26,
+            "atr_period": 14,
+            "volatility_window": 20,
+            "momentum_window": 10,
         },
         "alpha": {
             "engine": "rule_based",
@@ -34,8 +39,12 @@ def _fast_config(entry_threshold: float = 0.15):
             "exit_threshold": -0.05,
             "seq_len": 30,
         },
-        "strategy": {"max_positions_per_symbol": 1, "position_size_pct": 0.10,
-                     "urgent_alpha_threshold": 0.05, "confirmation_bars": 1},
+        "strategy": {
+            "max_positions_per_symbol": 1,
+            "position_size_pct": 0.10,
+            "urgent_alpha_threshold": 0.05,
+            "confirmation_bars": 1,
+        },
         "risk": {
             "max_portfolio_exposure": 0.50,
             "max_single_exposure": 0.15,
@@ -59,9 +68,13 @@ def _build_pipeline(config):
     risk_shield = RiskShield(config)
     order_manager = OrderManager(executor, tracker)
     monitor = StrategyMonitor(
-        config=config, buffer=buffer, extractor=extractor,
-        alpha_engine=alpha_engine, risk_shield=risk_shield,
-        tracker=tracker, order_manager=order_manager,
+        config=config,
+        buffer=buffer,
+        extractor=extractor,
+        alpha_engine=alpha_engine,
+        risk_shield=risk_shield,
+        tracker=tracker,
+        order_manager=order_manager,
     )
     return monitor, buffer, tracker
 
@@ -142,14 +155,21 @@ class TestRiskIntegration:
 
         # Create candles that drop sharply after initial rise
         up = make_candle_series(60, start_price=100.0, trend=0.5, noise=0.1, seed=1)
-        down = make_candle_series(30, start_price=up[-1].close, trend=-2.0, noise=0.1, seed=2)
+        down = make_candle_series(
+            30, start_price=up[-1].close, trend=-2.0, noise=0.1, seed=2
+        )
         # Fix timestamps for the down candles
         base = up[-1].timestamp
         for i, c in enumerate(down):
             down[i] = OHLCV(
-                symbol=c.symbol, open=c.open, high=c.high, low=c.low,
-                close=c.close, volume=c.volume,
-                timestamp=base + timedelta(minutes=i + 1), is_closed=True,
+                symbol=c.symbol,
+                open=c.open,
+                high=c.high,
+                low=c.low,
+                close=c.close,
+                volume=c.volume,
+                timestamp=base + timedelta(minutes=i + 1),
+                is_closed=True,
             )
 
         await _feed_candles(buffer, up + down)
@@ -195,10 +215,16 @@ class TestSyntheticDataGeneration:
         from models.train import generate_synthetic_ohlcv, build_dataset
 
         candles = generate_synthetic_ohlcv("BTC/USDT", n_candles=200, seed=42)
-        extractor = FeatureExtractor({
-            "rsi_period": 14, "ema_fast": 12, "ema_slow": 26,
-            "atr_period": 14, "volatility_window": 20, "momentum_window": 10,
-        })
+        extractor = FeatureExtractor(
+            {
+                "rsi_period": 14,
+                "ema_fast": 12,
+                "ema_slow": 26,
+                "atr_period": 14,
+                "volatility_window": 20,
+                "momentum_window": 10,
+            }
+        )
         X, y = build_dataset(candles, extractor, seq_len=30, forward_window=5)
         assert X.shape[1] == 30  # seq_len
         assert X.shape[2] == 10  # n_features
@@ -212,7 +238,6 @@ class TestModelWrapper:
 
     def test_pytorch_load_and_predict(self):
         import torch
-        from pathlib import Path
         from models.lstm_model import LSTMAlphaModel
         from models.model_wrapper import ModelWrapper
         import numpy as np

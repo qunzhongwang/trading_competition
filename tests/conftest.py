@@ -25,6 +25,7 @@ from core.models import (
 # OHLCV candle helpers
 # ---------------------------------------------------------------------------
 
+
 def make_candle(
     symbol: str = "BTC/USDT",
     close: float = 100.0,
@@ -41,8 +42,14 @@ def make_candle(
     low = low if low is not None else close * 0.998
     ts = ts or datetime(2025, 1, 1)
     return OHLCV(
-        symbol=symbol, open=open_, high=high, low=low,
-        close=close, volume=volume, timestamp=ts, is_closed=is_closed,
+        symbol=symbol,
+        open=open_,
+        high=high,
+        low=low,
+        close=close,
+        volume=volume,
+        timestamp=ts,
+        is_closed=is_closed,
     )
 
 
@@ -74,22 +81,25 @@ def make_candle_series(
         o = price * (1 + rng.normal(0, 0.001))
         h = price * (1 + abs(rng.normal(0, 0.003)))
         l = price * (1 - abs(rng.normal(0, 0.003)))
-        candles.append(OHLCV(
-            symbol=symbol,
-            open=round(o, 2),
-            high=round(h, 2),
-            low=round(l, 2),
-            close=round(price, 2),
-            volume=round(rng.uniform(5, 50), 2),
-            timestamp=base_time + timedelta(minutes=i),
-            is_closed=True,
-        ))
+        candles.append(
+            OHLCV(
+                symbol=symbol,
+                open=round(o, 2),
+                high=round(h, 2),
+                low=round(l, 2),
+                close=round(price, 2),
+                volume=round(rng.uniform(5, 50), 2),
+                timestamp=base_time + timedelta(minutes=i),
+                is_closed=True,
+            )
+        )
     return candles
 
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def candles_60():

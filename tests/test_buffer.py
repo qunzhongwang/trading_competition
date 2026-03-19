@@ -3,9 +3,8 @@
 import asyncio
 
 import pytest
-import pytest_asyncio
 
-from core.models import OHLCV, Tick
+from core.models import Tick
 from data.buffer import LiveBuffer
 from tests.conftest import make_candle
 
@@ -53,15 +52,24 @@ class TestPushCandle:
 class TestPushTick:
     async def test_push_and_retrieve(self, buffer):
         from datetime import datetime
-        tick = Tick(symbol="BTC/USDT", price=100.0, quantity=1.0, timestamp=datetime(2025, 1, 1))
+
+        tick = Tick(
+            symbol="BTC/USDT", price=100.0, quantity=1.0, timestamp=datetime(2025, 1, 1)
+        )
         await buffer.push_tick(tick)
         ticks = await buffer.get_ticks("BTC/USDT")
         assert len(ticks) == 1
 
     async def test_max_ticks(self, buffer):
         from datetime import datetime
+
         for i in range(25):
-            tick = Tick(symbol="BTC/USDT", price=float(i), quantity=1.0, timestamp=datetime(2025, 1, 1))
+            tick = Tick(
+                symbol="BTC/USDT",
+                price=float(i),
+                quantity=1.0,
+                timestamp=datetime(2025, 1, 1),
+            )
             await buffer.push_tick(tick)
         ticks = await buffer.get_ticks("BTC/USDT")
         assert len(ticks) == 20  # max_ticks=20
@@ -97,6 +105,7 @@ class TestEvent:
 
     async def test_non_closed_candle_no_event(self, buffer):
         """Pushing a non-closed candle should NOT trigger the event."""
+
         async def consumer():
             return await buffer.wait_for_update(timeout=0.1)
 

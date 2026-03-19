@@ -36,7 +36,9 @@ class PortfolioTracker:
 
     def snapshot(self) -> PortfolioSnapshot:
         nav = self._compute_nav()
-        drawdown = (self._peak_nav - nav) / self._peak_nav if self._peak_nav > 0 else 0.0
+        drawdown = (
+            (self._peak_nav - nav) / self._peak_nav if self._peak_nav > 0 else 0.0
+        )
         daily_pnl = nav - self._daily_start_nav
 
         return PortfolioSnapshot(
@@ -65,15 +67,21 @@ class PortfolioTracker:
             old_value = pos.entry_price * pos.quantity
             new_value = order.filled_price * order.filled_quantity
             pos.quantity += order.filled_quantity
-            pos.entry_price = (old_value + new_value) / pos.quantity if pos.quantity > 0 else 0.0
+            pos.entry_price = (
+                (old_value + new_value) / pos.quantity if pos.quantity > 0 else 0.0
+            )
             pos.peak_price = max(pos.peak_price, order.filled_price)
             pos.current_price = order.filled_price
             pos.state = StrategyState.HOLDING
-            self._cash -= (cost + fee)
+            self._cash -= cost + fee
 
             logger.info(
                 "BUY filled: %s qty=%.6f @ %.2f, fee=%.2f, cash=%.2f",
-                symbol, order.filled_quantity, order.filled_price, fee, self._cash,
+                symbol,
+                order.filled_quantity,
+                order.filled_price,
+                fee,
+                self._cash,
             )
 
         elif order.side == Side.SELL:
@@ -82,7 +90,7 @@ class PortfolioTracker:
             pos.realized_pnl += pnl
             pos.quantity -= order.filled_quantity
             pos.current_price = order.filled_price
-            self._cash += (cost - fee)
+            self._cash += cost - fee
 
             if pos.quantity <= 1e-10:
                 pos.quantity = 0.0
@@ -92,7 +100,12 @@ class PortfolioTracker:
 
             logger.info(
                 "SELL filled: %s qty=%.6f @ %.2f, pnl=%.2f, fee=%.2f, cash=%.2f",
-                symbol, order.filled_quantity, order.filled_price, pnl, fee, self._cash,
+                symbol,
+                order.filled_quantity,
+                order.filled_price,
+                pnl,
+                fee,
+                self._cash,
             )
 
         # Update peak NAV and record history

@@ -1,4 +1,5 @@
 """Tests for models/icir_tracker.py — BayesianICIRTracker."""
+
 from __future__ import annotations
 
 import pytest
@@ -45,7 +46,9 @@ class TestICIRShrinkageDecay:
     def test_few_samples_returns_prior(self):
         priors = {"BTC/USDT": {"rsi": 0.4, "momentum": 0.2, "ema": 0.3, "vol": 0.1}}
         tracker = BayesianICIRTracker(
-            prior_weights=priors, min_samples=30, min_lambda=0.3,
+            prior_weights=priors,
+            min_samples=30,
+            min_lambda=0.3,
         )
         # Only 5 samples — should return pure prior
         for i in range(5):
@@ -57,16 +60,24 @@ class TestICIRShrinkageDecay:
     def test_many_samples_shifts_from_prior(self):
         priors = {"BTC/USDT": {"rsi": 0.25, "momentum": 0.25, "ema": 0.25, "vol": 0.25}}
         tracker = BayesianICIRTracker(
-            prior_weights=priors, min_samples=10, min_lambda=0.3, tau=10.0,
+            prior_weights=priors,
+            min_samples=10,
+            min_lambda=0.3,
+            tau=10.0,
         )
         # Record many samples where factor 0 (RSI) dominates
         import random
+
         random.seed(42)
         for i in range(200):
             # RSI signal strongly correlated with returns
             rsi = random.gauss(0, 1)
             ret = rsi * 0.1 + random.gauss(0, 0.01)
-            tracker.record("BTC/USDT", [rsi, random.gauss(0, 0.1), random.gauss(0, 0.1), random.gauss(0, 0.1)], ret)
+            tracker.record(
+                "BTC/USDT",
+                [rsi, random.gauss(0, 0.1), random.gauss(0, 0.1), random.gauss(0, 0.1)],
+                ret,
+            )
 
         weights = tracker.get_weights("BTC/USDT")
         # RSI weight should be highest

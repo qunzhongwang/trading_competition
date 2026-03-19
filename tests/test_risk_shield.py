@@ -1,10 +1,8 @@
 """Tests for risk/risk_shield.py — pre-trade validation, stops, circuit breaker."""
 
-import time
-
 import pytest
 
-from core.models import OHLCV, Order, OrderType, Position, Side, StrategyState
+from core.models import Order, OrderType, Side, StrategyState
 from risk.risk_shield import RiskShield
 from risk.tracker import PortfolioTracker
 from tests.conftest import make_candle, make_filled_buy
@@ -22,15 +20,20 @@ def tracker():
 
 def _buy_order(symbol="BTC/USDT", qty=1.0, price=100.0):
     return Order(
-        symbol=symbol, side=Side.BUY,
-        order_type=OrderType.MARKET, quantity=qty, price=price,
+        symbol=symbol,
+        side=Side.BUY,
+        order_type=OrderType.MARKET,
+        quantity=qty,
+        price=price,
     )
 
 
 def _sell_order(symbol="BTC/USDT", qty=1.0):
     return Order(
-        symbol=symbol, side=Side.SELL,
-        order_type=OrderType.MARKET, quantity=qty,
+        symbol=symbol,
+        side=Side.SELL,
+        order_type=OrderType.MARKET,
+        quantity=qty,
     )
 
 

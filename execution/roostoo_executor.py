@@ -5,6 +5,7 @@ execution and balance tracking.
 
 Symbol mapping: internal BTC/USDT -> Roostoo BTC/USD at the boundary.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -104,8 +105,11 @@ class RoostooExecutor(BaseExecutor):
             order.filled_at = datetime.utcnow()
             logger.info(
                 "Roostoo order filled: %s %s %.6f @ %.2f (latency %.0fms)",
-                order.side.value, order.symbol, order.filled_quantity,
-                order.filled_price, latency_ms,
+                order.side.value,
+                order.symbol,
+                order.filled_quantity,
+                order.filled_price,
+                latency_ms,
             )
         elif data and not data.get("Success"):
             order.status = OrderStatus.REJECTED
@@ -145,12 +149,17 @@ class RoostooExecutor(BaseExecutor):
 
         status = OrderStatus.CANCELLED
         if data and not data.get("Success"):
-            logger.warning("Cancel may have failed for %s: %s", order_id, data.get("ErrMsg"))
+            logger.warning(
+                "Cancel may have failed for %s: %s", order_id, data.get("ErrMsg")
+            )
 
         return Order(
-            order_id=order_id, symbol=symbol,
-            side=Side.BUY, order_type=OrderType.MARKET,
-            quantity=0, status=status,
+            order_id=order_id,
+            symbol=symbol,
+            side=Side.BUY,
+            order_type=OrderType.MARKET,
+            quantity=0,
+            status=status,
         )
 
     async def get_status(self, order_id: str, symbol: str) -> Order:
@@ -176,7 +185,8 @@ class RoostooExecutor(BaseExecutor):
             }
             status = status_map.get(status_str, OrderStatus.PENDING)
             return Order(
-                order_id=order_id, symbol=symbol,
+                order_id=order_id,
+                symbol=symbol,
                 side=Side(order_data.get("side", "BUY")),
                 order_type=OrderType(order_data.get("type", "MARKET")),
                 quantity=float(order_data.get("origQty", 0)),
@@ -186,9 +196,12 @@ class RoostooExecutor(BaseExecutor):
             )
 
         return Order(
-            order_id=order_id, symbol=symbol,
-            side=Side.BUY, order_type=OrderType.MARKET,
-            quantity=0, status=OrderStatus.PENDING,
+            order_id=order_id,
+            symbol=symbol,
+            side=Side.BUY,
+            order_type=OrderType.MARKET,
+            quantity=0,
+            status=OrderStatus.PENDING,
         )
 
     # ── Balance & Exchange Info ──
@@ -261,17 +274,22 @@ class RoostooExecutor(BaseExecutor):
                     )
                 else:
                     resp = await self._session.post(
-                        url, data=query_string, headers={
+                        url,
+                        data=query_string,
+                        headers={
                             **headers,
                             "Content-Type": "application/x-www-form-urlencoded",
-                        }
+                        },
                     )
 
                 if resp.status in (429, 500, 502, 503, 504):
-                    wait = RETRY_BACKOFF_BASE * (2 ** attempt)
+                    wait = RETRY_BACKOFF_BASE * (2**attempt)
                     logger.warning(
                         "Roostoo %s %s returned %d, retrying in %.1fs...",
-                        method, endpoint, resp.status, wait,
+                        method,
+                        endpoint,
+                        resp.status,
+                        wait,
                     )
                     await asyncio.sleep(wait)
                     continue
@@ -289,15 +307,21 @@ class RoostooExecutor(BaseExecutor):
 
             except Exception as e:
                 if attempt < MAX_RETRIES - 1:
-                    wait = RETRY_BACKOFF_BASE * (2 ** attempt)
-                    logger.warning("Roostoo request error: %s, retrying in %.1fs", e, wait)
+                    wait = RETRY_BACKOFF_BASE * (2**attempt)
+                    logger.warning(
+                        "Roostoo request error: %s, retrying in %.1fs", e, wait
+                    )
                     await asyncio.sleep(wait)
                 else:
-                    logger.error("Roostoo request failed after %d retries: %s", MAX_RETRIES, e)
+                    logger.error(
+                        "Roostoo request failed after %d retries: %s", MAX_RETRIES, e
+                    )
                     if self._trade_logger:
                         await self._trade_logger.log_api(
-                            endpoint=endpoint, params=params,
-                            success=False, error_msg=str(e),
+                            endpoint=endpoint,
+                            params=params,
+                            success=False,
+                            error_msg=str(e),
                         )
         return None
 

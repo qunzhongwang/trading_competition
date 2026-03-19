@@ -3,6 +3,7 @@
 Tracks recent trades and computes blended win rate / payoff ratio
 that smoothly transition from static priors to observed outcomes.
 """
+
 from __future__ import annotations
 
 import logging
@@ -36,8 +37,13 @@ class TradeTracker:
         self._trades.append((entry_price, exit_price))
         self._n_total += 1
         ret = (exit_price - entry_price) / entry_price
-        logger.debug("Trade recorded: entry=%.2f exit=%.2f ret=%.4f (total=%d)",
-                      entry_price, exit_price, ret, self._n_total)
+        logger.debug(
+            "Trade recorded: entry=%.2f exit=%.2f ret=%.4f (total=%d)",
+            entry_price,
+            exit_price,
+            ret,
+            self._n_total,
+        )
 
     def get_kelly_params(self) -> Tuple[float, float]:
         """Return blended (win_rate, payoff_ratio).

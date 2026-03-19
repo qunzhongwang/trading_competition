@@ -2,11 +2,9 @@
 
 from datetime import datetime
 
-import pytest
 
 from core.models import (
     OHLCV,
-    FeatureVector,
     Order,
     OrderStatus,
     OrderType,
@@ -15,7 +13,6 @@ from core.models import (
     Side,
     Signal,
     StrategyState,
-    Tick,
 )
 
 
@@ -43,8 +40,12 @@ class TestEnums:
 class TestOHLCV:
     def test_create(self):
         c = OHLCV(
-            symbol="BTC/USDT", open=100.0, high=105.0,
-            low=95.0, close=102.0, volume=50.0,
+            symbol="BTC/USDT",
+            open=100.0,
+            high=105.0,
+            low=95.0,
+            close=102.0,
+            volume=50.0,
             timestamp=datetime(2025, 1, 1),
         )
         assert c.is_closed is True
@@ -52,24 +53,35 @@ class TestOHLCV:
 
     def test_not_closed(self):
         c = OHLCV(
-            symbol="BTC/USDT", open=100.0, high=105.0,
-            low=95.0, close=102.0, volume=50.0,
-            timestamp=datetime(2025, 1, 1), is_closed=False,
+            symbol="BTC/USDT",
+            open=100.0,
+            high=105.0,
+            low=95.0,
+            close=102.0,
+            volume=50.0,
+            timestamp=datetime(2025, 1, 1),
+            is_closed=False,
         )
         assert c.is_closed is False
 
 
 class TestOrder:
     def test_defaults(self):
-        o = Order(symbol="BTC/USDT", side=Side.BUY, order_type=OrderType.MARKET, quantity=1.0)
+        o = Order(
+            symbol="BTC/USDT", side=Side.BUY, order_type=OrderType.MARKET, quantity=1.0
+        )
         assert o.status == OrderStatus.PENDING
         assert o.filled_price is None
         assert o.filled_quantity == 0.0
         assert len(o.order_id) == 12
 
     def test_unique_ids(self):
-        o1 = Order(symbol="BTC/USDT", side=Side.BUY, order_type=OrderType.MARKET, quantity=1.0)
-        o2 = Order(symbol="BTC/USDT", side=Side.BUY, order_type=OrderType.MARKET, quantity=1.0)
+        o1 = Order(
+            symbol="BTC/USDT", side=Side.BUY, order_type=OrderType.MARKET, quantity=1.0
+        )
+        o2 = Order(
+            symbol="BTC/USDT", side=Side.BUY, order_type=OrderType.MARKET, quantity=1.0
+        )
         assert o1.order_id != o2.order_id
 
 
@@ -92,8 +104,10 @@ class TestSignal:
 class TestPortfolioSnapshot:
     def test_create(self):
         snap = PortfolioSnapshot(
-            timestamp=datetime(2025, 1, 1), cash=100_000.0,
-            nav=100_000.0, peak_nav=100_000.0,
+            timestamp=datetime(2025, 1, 1),
+            cash=100_000.0,
+            nav=100_000.0,
+            peak_nav=100_000.0,
         )
         assert snap.drawdown == 0.0
         assert snap.daily_pnl == 0.0

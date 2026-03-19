@@ -1,11 +1,11 @@
 """Tests for SimulatedFeed — GBM generation and CSV replay."""
+
 from __future__ import annotations
 
 import asyncio
 import csv
 from datetime import datetime
 
-import pytest
 
 from data.buffer import LiveBuffer
 from data.sim_feed import SimulatedFeed
@@ -108,16 +108,30 @@ class TestCSVReplay:
         csv_file = tmp_path / "replay.csv"
         with open(csv_file, "w", newline="") as f:
             writer = csv.DictWriter(
-                f, fieldnames=["symbol", "timestamp", "open", "high", "low", "close", "volume"]
+                f,
+                fieldnames=[
+                    "symbol",
+                    "timestamp",
+                    "open",
+                    "high",
+                    "low",
+                    "close",
+                    "volume",
+                ],
             )
             writer.writeheader()
             for i in range(5):
-                writer.writerow({
-                    "symbol": "BTC/USDT",
-                    "timestamp": datetime(2025, 1, 1, 0, i).isoformat(),
-                    "open": 100 + i, "high": 102 + i, "low": 99 + i,
-                    "close": 101 + i, "volume": 10,
-                })
+                writer.writerow(
+                    {
+                        "symbol": "BTC/USDT",
+                        "timestamp": datetime(2025, 1, 1, 0, i).isoformat(),
+                        "open": 100 + i,
+                        "high": 102 + i,
+                        "low": 99 + i,
+                        "close": 101 + i,
+                        "volume": 10,
+                    }
+                )
 
         config = {
             "symbols": ["BTC/USDT"],
@@ -134,15 +148,30 @@ class TestCSVReplay:
         csv_file = tmp_path / "big_replay.csv"
         with open(csv_file, "w", newline="") as f:
             writer = csv.DictWriter(
-                f, fieldnames=["symbol", "timestamp", "open", "high", "low", "close", "volume"]
+                f,
+                fieldnames=[
+                    "symbol",
+                    "timestamp",
+                    "open",
+                    "high",
+                    "low",
+                    "close",
+                    "volume",
+                ],
             )
             writer.writeheader()
             for i in range(1000):
-                writer.writerow({
-                    "symbol": "BTC/USDT",
-                    "timestamp": datetime(2025, 1, 1, i // 60, i % 60).isoformat(),
-                    "open": 100, "high": 102, "low": 99, "close": 101, "volume": 10,
-                })
+                writer.writerow(
+                    {
+                        "symbol": "BTC/USDT",
+                        "timestamp": datetime(2025, 1, 1, i // 60, i % 60).isoformat(),
+                        "open": 100,
+                        "high": 102,
+                        "low": 99,
+                        "close": 101,
+                        "volume": 10,
+                    }
+                )
 
         config = {
             "symbols": ["BTC/USDT"],

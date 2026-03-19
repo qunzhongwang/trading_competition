@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import math
 from typing import List, Optional
 
 import numpy as np
@@ -18,8 +17,18 @@ class FeatureExtractor:
     """
 
     # Feature names in the order used by extract_sequence()
-    FEATURE_NAMES = ["rsi", "ema_fast", "ema_slow", "atr", "momentum", "volatility",
-                     "order_book_imbalance", "volume_ratio", "funding_rate", "taker_ratio"]
+    FEATURE_NAMES = [
+        "rsi",
+        "ema_fast",
+        "ema_slow",
+        "atr",
+        "momentum",
+        "volatility",
+        "order_book_imbalance",
+        "volume_ratio",
+        "funding_rate",
+        "taker_ratio",
+    ]
     N_FEATURES = len(FEATURE_NAMES)
 
     def __init__(self, config: dict):
@@ -33,19 +42,32 @@ class FeatureExtractor:
     @property
     def min_candles(self) -> int:
         """Minimum candles needed to compute all features."""
-        return max(self._rsi_period, self._ema_slow, self._atr_period,
-                   self._momentum_window, self._volatility_window) + 2
+        return (
+            max(
+                self._rsi_period,
+                self._ema_slow,
+                self._atr_period,
+                self._momentum_window,
+                self._volatility_window,
+            )
+            + 2
+        )
 
-    def extract(self, candles: List[OHLCV], supplementary: Optional[dict] = None) -> FeatureVector:
+    def extract(
+        self, candles: List[OHLCV], supplementary: Optional[dict] = None
+    ) -> FeatureVector:
         """Compute features for the most recent candle."""
         if len(candles) < self.min_candles:
             logger.warning(
                 "Not enough candles (%d < %d), returning zeros",
-                len(candles), self.min_candles,
+                len(candles),
+                self.min_candles,
             )
             return FeatureVector(
                 symbol=candles[-1].symbol if candles else "",
-                timestamp=candles[-1].timestamp if candles else __import__("datetime").datetime.utcnow(),
+                timestamp=candles[-1].timestamp
+                if candles
+                else __import__("datetime").datetime.utcnow(),
             )
 
         closes = [c.close for c in candles]
@@ -67,25 +89,43 @@ class FeatureExtractor:
             taker_ratio=supp.get("taker_ratio", 0.0),
         )
 
-    def extract_sequence(self, candles: List[OHLCV], seq_len: int = 30,
-                         supplementary: Optional[dict] = None,
-                         supplementary_history: Optional[dict] = None) -> np.ndarray:
+    def extract_sequence(
+        self,
+        candles: List[OHLCV],
+        seq_len: int = 30,
+        supplementary: Optional[dict] = None,
+        supplementary_history: Optional[dict] = None,
+    ) -> np.ndarray:
         """Extract a (seq_len, n_features) normalized array for LSTM input.
 
         Delegates to the vectorized implementation for performance.
         Falls back to the iterative method on error.
         """
         try:
-            return self.extract_sequence_vectorized(candles, seq_len, supplementary,
-                                                    supplementary_history=supplementary_history)
+            return self.extract_sequence_vectorized(
+                candles,
+                seq_len,
+                supplementary,
+                supplementary_history=supplementary_history,
+            )
         except Exception as e:
-            logger.warning("Vectorized extraction failed (%s), falling back to iterative", e)
-            return self._extract_sequence_iterative(candles, seq_len, supplementary,
-                                                    supplementary_history=supplementary_history)
+            logger.warning(
+                "Vectorized extraction failed (%s), falling back to iterative", e
+            )
+            return self._extract_sequence_iterative(
+                candles,
+                seq_len,
+                supplementary,
+                supplementary_history=supplementary_history,
+            )
 
-    def _extract_sequence_iterative(self, candles: List[OHLCV], seq_len: int = 30,
-                                    supplementary: Optional[dict] = None,
-                                    supplementary_history: Optional[dict] = None) -> np.ndarray:
+    def _extract_sequence_iterative(
+        self,
+        candles: List[OHLCV],
+        seq_len: int = 30,
+        supplementary: Optional[dict] = None,
+        supplementary_history: Optional[dict] = None,
+    ) -> np.ndarray:
         """Original iterative extraction (fallback)."""
         total_needed = self.min_candles + seq_len
         if len(candles) < total_needed:
@@ -93,19 +133,28 @@ class FeatureExtractor:
 
         # Build per-timestep supplementary arrays from history
         obi_seq, funding_seq, taker_seq = self._resolve_supplementary_history(
-            supplementary, supplementary_history, seq_len)
+            supplementary, supplementary_history, seq_len
+        )
 
         features = []
         for i in range(seq_len):
             end_idx = len(candles) - (seq_len - 1 - i)
             window = candles[:end_idx]
             fv = self.extract(window, supplementary=supplementary)
-            features.append([
-                fv.rsi, fv.ema_fast, fv.ema_slow,
-                fv.atr, fv.momentum, fv.volatility,
-                obi_seq[i], fv.volume_ratio,
-                funding_seq[i], taker_seq[i],
-            ])
+            features.append(
+                [
+                    fv.rsi,
+                    fv.ema_fast,
+                    fv.ema_slow,
+                    fv.atr,
+                    fv.momentum,
+                    fv.volatility,
+                    obi_seq[i],
+                    fv.volume_ratio,
+                    funding_seq[i],
+                    taker_seq[i],
+                ]
+            )
 
         arr = np.array(features, dtype=np.float32)
         mean = arr.mean(axis=0, keepdims=True)
@@ -114,9 +163,13 @@ class FeatureExtractor:
         arr = (arr - mean) / std
         return arr
 
-    def extract_sequence_vectorized(self, candles: List[OHLCV], seq_len: int = 30,
-                                    supplementary: Optional[dict] = None,
-                                    supplementary_history: Optional[dict] = None) -> np.ndarray:
+    def extract_sequence_vectorized(
+        self,
+        candles: List[OHLCV],
+        seq_len: int = 30,
+        supplementary: Optional[dict] = None,
+        supplementary_history: Optional[dict] = None,
+    ) -> np.ndarray:
         """Vectorized extraction: compute all features in single numpy passes, then slice.
 
         ~60x faster than iterative for seq_len=60 since each indicator is computed once
@@ -148,23 +201,26 @@ class FeatureExtractor:
 
         # Supplementary: use per-timestep history if available, else constant
         obi_seq, funding_seq, taker_seq = self._resolve_supplementary_history(
-            supplementary, supplementary_history, seq_len)
+            supplementary, supplementary_history, seq_len
+        )
 
         # Stack: take last seq_len values from each array
         # All arrays are length n; we take indices [n-seq_len : n]
         sl = slice(n - seq_len, n)
-        seq = np.column_stack([
-            rsi_arr[sl],
-            ema_fast_arr[sl],
-            ema_slow_arr[sl],
-            atr_arr[sl],
-            momentum_arr[sl],
-            volatility_arr[sl],
-            np.array(obi_seq, dtype=np.float32),
-            volume_ratio_arr[sl],
-            np.array(funding_seq, dtype=np.float32),
-            np.array(taker_seq, dtype=np.float32),
-        ]).astype(np.float32)
+        seq = np.column_stack(
+            [
+                rsi_arr[sl],
+                ema_fast_arr[sl],
+                ema_slow_arr[sl],
+                atr_arr[sl],
+                momentum_arr[sl],
+                volatility_arr[sl],
+                np.array(obi_seq, dtype=np.float32),
+                volume_ratio_arr[sl],
+                np.array(funding_seq, dtype=np.float32),
+                np.array(taker_seq, dtype=np.float32),
+            ]
+        ).astype(np.float32)
 
         # Z-score normalize
         mean = seq.mean(axis=0, keepdims=True)
@@ -216,8 +272,8 @@ class FeatureExtractor:
         losses = np.where(deltas < 0, -deltas, 0.0)
         # Simple moving average for initial window, then rolling
         for i in range(period, len(deltas)):
-            avg_gain = np.mean(gains[i - period:i])
-            avg_loss = np.mean(losses[i - period:i])
+            avg_gain = np.mean(gains[i - period : i])
+            avg_loss = np.mean(losses[i - period : i])
             if avg_loss < 1e-10:
                 rsi[i + 1] = 100.0
             else:
@@ -237,8 +293,9 @@ class FeatureExtractor:
         return ema
 
     @staticmethod
-    def _vectorized_atr(highs: np.ndarray, lows: np.ndarray, closes: np.ndarray,
-                        period: int) -> np.ndarray:
+    def _vectorized_atr(
+        highs: np.ndarray, lows: np.ndarray, closes: np.ndarray, period: int
+    ) -> np.ndarray:
         """Compute ATR for every position in the array."""
         n = len(closes)
         atr = np.zeros(n, dtype=np.float64)
@@ -254,7 +311,7 @@ class FeatureExtractor:
         )
         # Rolling mean of true range
         for i in range(period, len(tr)):
-            atr[i + 1] = np.mean(tr[i - period:i])
+            atr[i + 1] = np.mean(tr[i - period : i])
         return atr
 
     @staticmethod
@@ -275,7 +332,7 @@ class FeatureExtractor:
         safe_closes = np.where(closes <= 0, 1e-10, closes)
         log_returns = np.diff(np.log(safe_closes))
         for i in range(window, len(log_returns)):
-            vol[i + 1] = np.std(log_returns[i - window:i])
+            vol[i + 1] = np.std(log_returns[i - window : i])
         return vol
 
     @staticmethod
@@ -284,7 +341,7 @@ class FeatureExtractor:
         n = len(volumes)
         ratio = np.ones(n, dtype=np.float64)
         for i in range(window, n):
-            avg = np.mean(volumes[i - window:i])
+            avg = np.mean(volumes[i - window : i])
             if avg > 1e-10:
                 ratio[i] = volumes[i] / avg
         return ratio
@@ -295,7 +352,7 @@ class FeatureExtractor:
         if len(closes) < period + 1:
             return 50.0
 
-        deltas = np.diff(closes[-(period + 1):])
+        deltas = np.diff(closes[-(period + 1) :])
         gains = np.where(deltas > 0, deltas, 0.0)
         losses = np.where(deltas < 0, -deltas, 0.0)
 
@@ -327,7 +384,7 @@ class FeatureExtractor:
         if len(candles) < period + 1:
             return 0.0
 
-        recent = candles[-(period + 1):]
+        recent = candles[-(period + 1) :]
         true_ranges = []
         for i in range(1, len(recent)):
             high = recent[i].high
@@ -353,7 +410,7 @@ class FeatureExtractor:
         if len(closes) < window + 1:
             return 0.0
 
-        prices = np.array(closes[-(window + 1):], dtype=np.float64)
+        prices = np.array(closes[-(window + 1) :], dtype=np.float64)
         prices = np.where(prices <= 0, 1e-10, prices)  # safety
         log_returns = np.diff(np.log(prices))
         return float(np.std(log_returns))
@@ -363,7 +420,7 @@ class FeatureExtractor:
         """Current candle volume / rolling average volume."""
         if len(candles) < window + 1:
             return 1.0
-        volumes = [c.volume for c in candles[-(window + 1):-1]]
+        volumes = [c.volume for c in candles[-(window + 1) : -1]]
         avg = sum(volumes) / len(volumes) if volumes else 1.0
         if avg < 1e-10:
             return 1.0

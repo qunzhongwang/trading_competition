@@ -1,4 +1,5 @@
 """Roostoo API authentication — HMAC SHA256 signing."""
+
 from __future__ import annotations
 
 import hashlib
@@ -63,7 +64,9 @@ class RoostooAuth:
         url = f"{base_url}/v3/serverTime"
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                async with session.get(
+                    url, timeout=aiohttp.ClientTimeout(total=10)
+                ) as resp:
                     data = await resp.json()
                     server_time = int(data.get("serverTime", 0))
                     local_time = self.get_timestamp()
@@ -71,7 +74,8 @@ class RoostooAuth:
                     if drift > self.MAX_TIME_DRIFT_MS:
                         logger.warning(
                             "Server time drift too large: %d ms (max %d ms)",
-                            drift, self.MAX_TIME_DRIFT_MS,
+                            drift,
+                            self.MAX_TIME_DRIFT_MS,
                         )
                         return False
                     logger.info("Server time drift: %d ms (OK)", drift)

@@ -1,7 +1,7 @@
 """Tests for strategy/trade_tracker.py — adaptive Kelly parameters."""
+
 from __future__ import annotations
 
-import pytest
 
 from strategy.trade_tracker import TradeTracker
 
@@ -14,7 +14,9 @@ class TestTradeTracker:
         assert payoff == 1.5
 
     def test_all_wins_shifts_win_rate_up(self):
-        tt = TradeTracker(window=50, min_trades=5, prior_win_rate=0.55, prior_payoff=1.5)
+        tt = TradeTracker(
+            window=50, min_trades=5, prior_win_rate=0.55, prior_payoff=1.5
+        )
         for _ in range(10):
             tt.record_trade(100.0, 110.0)
 
@@ -23,7 +25,9 @@ class TestTradeTracker:
         assert wr <= 1.0
 
     def test_all_losses_shifts_win_rate_down(self):
-        tt = TradeTracker(window=50, min_trades=5, prior_win_rate=0.55, prior_payoff=1.5)
+        tt = TradeTracker(
+            window=50, min_trades=5, prior_win_rate=0.55, prior_payoff=1.5
+        )
         for _ in range(10):
             tt.record_trade(100.0, 90.0)
 
@@ -31,7 +35,9 @@ class TestTradeTracker:
         assert wr < 0.55  # shifted toward 0.0
 
     def test_blending_with_few_trades(self):
-        tt = TradeTracker(window=50, min_trades=10, prior_win_rate=0.55, prior_payoff=1.5)
+        tt = TradeTracker(
+            window=50, min_trades=10, prior_win_rate=0.55, prior_payoff=1.5
+        )
         # Only 2 trades — alpha = 0.2, mostly prior
         tt.record_trade(100.0, 110.0)
         tt.record_trade(100.0, 110.0)
