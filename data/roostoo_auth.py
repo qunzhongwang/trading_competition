@@ -67,8 +67,8 @@ class RoostooAuth:
                 async with session.get(
                     url, timeout=aiohttp.ClientTimeout(total=10)
                 ) as resp:
-                    data = await resp.json()
-                    server_time = int(data.get("serverTime", 0))
+                    data = await resp.json(content_type=None)
+                    server_time = int(data.get("ServerTime", 0))
                     local_time = self.get_timestamp()
                     drift = abs(server_time - local_time)
                     if drift > self.MAX_TIME_DRIFT_MS:

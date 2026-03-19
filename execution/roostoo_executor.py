@@ -98,10 +98,11 @@ class RoostooExecutor(BaseExecutor):
         latency_ms = (time.monotonic() - start_time) * 1000
 
         if data and data.get("Success"):
-            order_data = data.get("data", {})
-            executed_qty = float(order_data.get("executedQty", order.quantity))
-            order.filled_price = float(order_data.get("price", order.price or 0))
+            order_data = data.get("OrderDetail", {})
+            executed_qty = float(order_data.get("FilledQuantity", order.quantity))
+            order.filled_price = float(order_data.get("FilledAverPrice", 0) or order_data.get("Price", order.price or 0))
             order.filled_quantity = executed_qty
+            order.order_id = str(order_data.get("OrderID", order.order_id))
             order.filled_at = datetime.utcnow()
             # Detect partial fills
             if abs(executed_qty - order.quantity) > 1e-10 and executed_qty < order.quantity:
@@ -156,7 +157,7 @@ class RoostooExecutor(BaseExecutor):
 
         params = {
             "pair": roostoo_pair,
-            "orderId": order_id,
+            "order_id": order_id,
             "timestamp": str(timestamp),
         }
         data = await self._signed_request("POST", "/v3/cancel_order", params)
@@ -183,31 +184,34 @@ class RoostooExecutor(BaseExecutor):
 
         params = {
             "pair": roostoo_pair,
-            "orderId": order_id,
+            "order_id": order_id,
             "timestamp": str(timestamp),
         }
         data = await self._signed_request("POST", "/v3/query_order", params)
 
         if data and data.get("Success"):
-            order_data = data.get("data", {})
-            status_str = order_data.get("status", "PENDING")
-            status_map = {
-                "FILLED": OrderStatus.FILLED,
-                "PARTIALLY_FILLED": OrderStatus.PARTIALLY_FILLED,
-                "CANCELLED": OrderStatus.CANCELLED,
-                "NEW": OrderStatus.SUBMITTED,
-            }
-            status = status_map.get(status_str, OrderStatus.PENDING)
-            return Order(
-                order_id=order_id,
-                symbol=symbol,
-                side=Side(order_data.get("side", "BUY")),
-                order_type=OrderType(order_data.get("type", "MARKET")),
-                quantity=float(order_data.get("origQty", 0)),
-                filled_quantity=float(order_data.get("executedQty", 0)),
-                filled_price=float(order_data.get("price", 0)) or None,
-                status=status,
-            )
+            matches = data.get("OrderMatched", [])
+            if matches:
+                order_data = matches[0]
+                status_str = order_data.get("Status", "PENDING")
+                status_map = {
+                    "FILLED": OrderStatus.FILLED,
+                    "PARTIALLY_FILLED": OrderStatus.PARTIALLY_FILLED,
+                    "CANCELLED": OrderStatus.CANCELLED,
+                    "NEW": OrderStatus.SUBMITTED,
+                }
+                status = status_map.get(status_str, OrderStatus.PENDING)
+                side_str = order_data.get("Side", "BUY").upper()
+                return Order(
+                    order_id=order_id,
+                    symbol=symbol,
+                    side=Side(side_str),
+                    order_type=OrderType(order_data.get("Type", "MARKET")),
+                    quantity=float(order_data.get("Quantity", 0)),
+                    filled_quantity=float(order_data.get("FilledQuantity", 0)),
+                    filled_price=float(order_data.get("FilledAverPrice", 0)) or None,
+                    status=status,
+                )
 
         return Order(
             order_id=order_id,
@@ -228,11 +232,11 @@ class RoostooExecutor(BaseExecutor):
 
         balances: Dict[str, float] = {}
         if data and data.get("Success"):
-            for asset in data.get("data", []):
-                name = asset.get("asset", "")
-                free = float(asset.get("free", 0))
-                if free > 0 or name == "USD":
-                    balances[name] = free
+            wallet = data.get("Wallet", {})
+            for asset, amounts in wallet.items():
+                free = float(amounts.get("Free", 0))
+                if free > 0 or asset == "USD":
+                    balances[asset] = free
         return balances
 
     async def get_exchange_info(self) -> Dict[str, Any]:
@@ -243,11 +247,15 @@ class RoostooExecutor(BaseExecutor):
     async def get_ticker(self, symbol: str) -> Optional[float]:
         """Get latest ticker price for a Roostoo pair. GET /v3/ticker."""
         roostoo_pair = self.to_roostoo_symbol(symbol)
-        data = await self._unsigned_request(
-            "GET", "/v3/ticker", params={"pair": roostoo_pair}
-        )
+        timestamp = self._auth.get_timestamp()
+        params = {"pair": roostoo_pair, "timestamp": str(timestamp)}
+        data = await self._signed_request("GET", "/v3/ticker", params)
         if data and data.get("Success"):
-            return float(data.get("data", {}).get("price", 0))
+            ticker_data = data.get("Data", {})
+            pair_data = ticker_data.get(roostoo_pair, {})
+            price = pair_data.get("LastPrice", 0)
+            if price:
+                return float(price)
         return None
 
     # ── Internal Helpers ──
@@ -255,16 +263,20 @@ class RoostooExecutor(BaseExecutor):
     async def _load_exchange_info(self) -> None:
         """Cache pair precision and min order info from exchange."""
         data = await self.get_exchange_info()
-        if not data or not data.get("Success"):
+        if not data:
             logger.warning("Failed to load exchange info")
             return
-        for pair_info in data.get("data", {}).get("symbols", []):
-            symbol = pair_info.get("symbol", "")
+        trade_pairs = data.get("TradePairs", {})
+        if not trade_pairs:
+            logger.warning("No TradePairs in exchange info response")
+            return
+        for symbol, info in trade_pairs.items():
             internal = self.to_internal_symbol(symbol)
+            qty_precision = int(info.get("AmountPrecision", 8))
             self._pair_info[internal] = {
-                "min_qty": float(pair_info.get("minQty", 0)),
-                "qty_precision": int(pair_info.get("quantityPrecision", 8)),
-                "min_notional": float(pair_info.get("minNotional", 0)),
+                "min_qty": 10 ** (-qty_precision),
+                "qty_precision": qty_precision,
+                "min_notional": float(info.get("MiniOrder", 0)),
             }
 
     def _round_quantity(self, symbol: str, quantity: float) -> float:
@@ -308,7 +320,7 @@ class RoostooExecutor(BaseExecutor):
                     await asyncio.sleep(wait)
                     continue
 
-                data = await resp.json()
+                data = await resp.json(content_type=None)
 
                 if self._trade_logger:
                     await self._trade_logger.log_api(
@@ -349,7 +361,7 @@ class RoostooExecutor(BaseExecutor):
                 resp = await self._session.get(url, params=params)
             else:
                 resp = await self._session.post(url, data=params)
-            return await resp.json()
+            return await resp.json(content_type=None)
         except Exception as e:
             logger.error("Roostoo unsigned request failed: %s", e)
             return None
