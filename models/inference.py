@@ -1,12 +1,8 @@
 from __future__ import annotations
 
 import logging
-import math
 import time
-from datetime import datetime
 from typing import List, Optional
-
-import numpy as np
 
 from core.models import OHLCV, FeatureVector, Signal
 from features.extractor import FeatureExtractor

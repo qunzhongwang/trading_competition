@@ -55,7 +55,9 @@ class StrategyLogic:
         # Graduated exit tiers
         self._exit_tiers: List[Dict] = strategy_cfg.get("exit_tiers", [])
         self._exit_tier_reached: int = 0
-        self._initial_hold_qty: float = 0.0
+
+        # Track entry price for adaptive Kelly (read before tracker zeroes it on sell)
+        self._entry_price: float = 0.0
 
         # Optional TradeTracker for adaptive Kelly (injected after init)
         self._trade_tracker = None
@@ -216,11 +218,15 @@ class StrategyLogic:
         if order.side == Side.BUY and self._state == StrategyState.LONG_PENDING:
             self._state = StrategyState.HOLDING
             self._exit_tier_reached = 0
-            self._initial_hold_qty = order.filled_quantity or order.quantity
+            self._entry_price = order.filled_price or 0.0
             logger.info("[%s] LONG_PENDING → HOLDING (filled @ %.2f)", self._symbol, order.filled_price)
 
         elif order.side == Side.SELL:
+            # Record trade for adaptive Kelly BEFORE resetting state
+            if self._trade_tracker is not None and self._entry_price > 0 and order.filled_price:
+                self._trade_tracker.record_trade(self._entry_price, order.filled_price)
             self._state = StrategyState.FLAT
+            self._entry_price = 0.0
             logger.info("[%s] → FLAT (sold @ %.2f)", self._symbol, order.filled_price)
 
     def on_cancel(self, order: Order) -> None:
@@ -237,7 +243,7 @@ class StrategyLogic:
         self._state = StrategyState.FLAT
         self._alpha_history.clear()
         self._exit_tier_reached = 0
-        self._initial_hold_qty = 0.0
+        self._entry_price = 0.0
 
     def set_trade_tracker(self, tracker) -> None:
         """Inject TradeTracker for adaptive Kelly sizing."""

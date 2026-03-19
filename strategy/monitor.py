@@ -258,11 +258,5 @@ class StrategyMonitor:
         if order.symbol in self._strategies:
             if order.status == OrderStatus.FILLED:
                 self._strategies[order.symbol].on_fill(order)
-                # Record trade for adaptive Kelly
-                if self._trade_tracker is not None and order.side.value == "SELL" and order.filled_price:
-                    # Find entry price from tracker positions
-                    pos = self._tracker.get_position(order.symbol)
-                    if pos and pos.entry_price > 0:
-                        self._trade_tracker.record_trade(pos.entry_price, order.filled_price)
             elif order.status in (OrderStatus.CANCELLED, OrderStatus.REJECTED):
                 self._strategies[order.symbol].on_cancel(order)
