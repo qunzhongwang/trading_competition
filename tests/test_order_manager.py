@@ -1,5 +1,7 @@
 """Tests for execution/order_manager.py — OrderManager lifecycle and callbacks."""
 
+from datetime import datetime, timedelta
+
 import pytest
 
 from core.models import Order, OrderStatus, OrderType, Side
@@ -113,3 +115,56 @@ class TestCancel:
     async def test_cancel_nonexistent(self, manager):
         # Should not raise
         await manager.cancel("nonexistent-id")
+
+
+@pytest.mark.asyncio
+class TestTimeout:
+    async def test_stale_order_cancelled(self, buffer, tracker):
+        """Orders older than timeout_seconds are auto-cancelled."""
+        config = {"slippage_bps": 5, "fee_bps": 10}
+        executor = SimExecutor(config, buffer)
+        mgr = OrderManager(executor, tracker, timeout_seconds=30)
+
+        await buffer.push_candle(make_candle(close=110.0))
+        order = Order(
+            symbol="BTC/USDT", side=Side.BUY,
+            order_type=OrderType.LIMIT, quantity=1.0, price=100.0,
+        )
+        submitted = await mgr.submit(order)
+        assert mgr.has_pending
+
+        # Simulate 60s age by backdating created_at
+        submitted.created_at = datetime.utcnow() - timedelta(seconds=60)
+        await mgr.check_pending()
+        assert not mgr.has_pending
+
+    async def test_fresh_order_not_cancelled(self, buffer, tracker):
+        """Orders within timeout_seconds are left alone."""
+        config = {"slippage_bps": 5, "fee_bps": 10}
+        executor = SimExecutor(config, buffer)
+        mgr = OrderManager(executor, tracker, timeout_seconds=30)
+
+        await buffer.push_candle(make_candle(close=110.0))
+        order = Order(
+            symbol="BTC/USDT", side=Side.BUY,
+            order_type=OrderType.LIMIT, quantity=1.0, price=100.0,
+        )
+        await mgr.submit(order)
+        await mgr.check_pending()
+        assert mgr.has_pending  # still active
+
+    async def test_timeout_zero_disables(self, buffer, tracker):
+        """timeout_seconds=0 means no timeout."""
+        config = {"slippage_bps": 5, "fee_bps": 10}
+        executor = SimExecutor(config, buffer)
+        mgr = OrderManager(executor, tracker, timeout_seconds=0)
+
+        await buffer.push_candle(make_candle(close=110.0))
+        order = Order(
+            symbol="BTC/USDT", side=Side.BUY,
+            order_type=OrderType.LIMIT, quantity=1.0, price=100.0,
+        )
+        submitted = await mgr.submit(order)
+        submitted.created_at = datetime.utcnow() - timedelta(seconds=9999)
+        await mgr.check_pending()
+        assert mgr.has_pending  # no timeout applied

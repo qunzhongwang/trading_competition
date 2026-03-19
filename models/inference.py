@@ -4,7 +4,6 @@ import logging
 import time
 from typing import List, Optional
 
-
 from core.models import OHLCV, FeatureVector, Signal
 from features.extractor import FeatureExtractor
 from models.model_wrapper import ModelWrapper

@@ -136,3 +136,33 @@ class TestMetadata:
         candles = await buffer.get_candles("BTC/USDT", n=3)
         assert len(candles) == 3
         assert candles[-1].close == 4.0  # last 3
+
+
+@pytest.mark.asyncio
+class TestResampled:
+    async def test_push_and_get_resampled(self, buffer):
+        candle = make_candle(close=100.0)
+        await buffer.push_resampled(15, candle)
+        result = await buffer.get_resampled_candles("BTC/USDT", 15)
+        assert len(result) == 1
+        assert result[0].close == 100.0
+
+    async def test_get_resampled_empty(self, buffer):
+        result = await buffer.get_resampled_candles("BTC/USDT", 60)
+        assert result == []
+
+    async def test_resampled_multi_timeframe(self, buffer):
+        c = make_candle(close=50.0)
+        await buffer.push_resampled(15, c)
+        await buffer.push_resampled(60, c)
+        r15 = await buffer.get_resampled_candles("BTC/USDT", 15)
+        r60 = await buffer.get_resampled_candles("BTC/USDT", 60)
+        assert len(r15) == 1
+        assert len(r60) == 1
+
+    async def test_resampled_respects_n_limit(self, buffer):
+        for i in range(10):
+            await buffer.push_resampled(15, make_candle(close=float(i)))
+        result = await buffer.get_resampled_candles("BTC/USDT", 15, n=3)
+        assert len(result) == 3
+        assert result[-1].close == 9.0
