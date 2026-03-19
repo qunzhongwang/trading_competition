@@ -36,9 +36,9 @@ echo "Time: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 echo "========================================="
 
 # Run with auto-restart on crash (max 5 restarts with backoff)
-MAX_RESTARTS=5
+MAX_RESTARTS=50
 RESTART_COUNT=0
-BACKOFF=10
+BACKOFF=30
 
 while [ $RESTART_COUNT -lt $MAX_RESTARTS ]; do
     if uv run python main.py --mode roostoo; then

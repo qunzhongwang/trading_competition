@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import time
 from typing import List, Optional
 
@@ -79,6 +80,11 @@ class AlphaEngine:
             )
             alpha = self._rule_based_score(features)
             source = "rule_based"
+
+        # Guard against NaN/inf from any engine path
+        if math.isnan(alpha) or math.isinf(alpha):
+            logger.warning("Alpha is %s for %s, defaulting to 0.0", alpha, features.symbol)
+            alpha = 0.0
 
         # Apply multi-timeframe filter (dampens/boosts rule-based and ensemble alpha)
         if candles_15m or candles_1h:
@@ -211,7 +217,11 @@ class AlphaEngine:
             supplementary=supplementary,
             supplementary_history=supplementary_history,
         )
-        return self._model.predict(seq)
+        result = self._model.predict(seq)
+        if math.isnan(result) or math.isinf(result):
+            logger.warning("Model returned %s, defaulting to 0.0", result)
+            return 0.0
+        return result
 
     @property
     def entry_threshold(self) -> float:

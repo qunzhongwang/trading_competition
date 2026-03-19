@@ -21,17 +21,24 @@ cp .env.example .env
 #   ROOSTOO_API_SECRET=your_secret_here
 # For the actual competition, use ROOSTOO_COMP_API_KEY / ROOSTOO_COMP_API_SECRET instead
 
-# 3. (Optional) Train LSTM model — skip to use rule-based alpha engine
-python -m models.train --synthetic --symbols BTC/USDT --device auto
-# Then set alpha.engine to "lstm" or "ensemble" in config/default.yaml
-
-# 4. Verify everything works (dry run with paper mode)
+# 3. Verify everything works (dry run with paper mode)
 python main.py  # Ctrl+C after a few minutes — check for errors
 
-# 5. Start competition mode
+# 4. Start competition mode
 python main.py --mode roostoo
 # Or use the auto-restart script:
 ./scripts/start_competition.sh
+# Or use the convenience script:
+./scripts/run.sh roostoo
+```
+
+#### Optional: Train LSTM Model
+
+The rule-based alpha engine works out of the box with no training. If you want to use LSTM or ensemble mode:
+
+```bash
+python -m models.train --synthetic --symbols BTC/USDT --device auto
+# Then set alpha.engine to "lstm" or "ensemble" in config/default.yaml
 ```
 
 ### Deploy to AWS EC2 (recommended for 10-day competition)

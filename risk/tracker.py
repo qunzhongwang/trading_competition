@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 import math
+import threading
+from collections import deque
 from datetime import datetime
 from typing import Dict, List, Tuple
 
@@ -29,10 +31,11 @@ class PortfolioTracker:
         self._daily_start_nav: float = initial_capital
         self._positions: Dict[str, Position] = {}
         self._fee_rate: float = fee_bps / 10000.0
-        # NAV history for risk-adjusted metrics
-        self._nav_history: List[Tuple[datetime, float]] = [
-            (datetime.utcnow(), initial_capital)
-        ]
+        self._fill_lock = threading.Lock()
+        # NAV history for risk-adjusted metrics (bounded to prevent memory leak)
+        self._nav_history: deque[Tuple[datetime, float]] = deque(
+            [(datetime.utcnow(), initial_capital)], maxlen=20000
+        )
 
     def snapshot(self) -> PortfolioSnapshot:
         nav = self._compute_nav()
@@ -53,6 +56,11 @@ class PortfolioTracker:
 
     def on_fill(self, order: Order) -> None:
         """Update positions and cash on order fill."""
+        with self._fill_lock:
+            self._on_fill_inner(order)
+
+    def _on_fill_inner(self, order: Order) -> None:
+        """Inner fill handler (called under lock)."""
         if order.filled_price is None or order.filled_quantity <= 0:
             logger.warning("Invalid fill: %s", order)
             return
@@ -154,6 +162,16 @@ class PortfolioTracker:
         self._daily_start_nav = self._compute_nav()
         logger.info("Daily reset: NAV=%.2f", self._daily_start_nav)
 
+    def restore_position(self, symbol: str, quantity: float, entry_price: float) -> None:
+        """Restore position from exchange state (restart recovery). Does not modify cash."""
+        pos = self._get_or_create_position(symbol)
+        pos.quantity = quantity
+        pos.entry_price = entry_price
+        pos.current_price = entry_price
+        pos.peak_price = entry_price
+        pos.state = StrategyState.HOLDING
+        logger.info("Restored position: %s qty=%.6f @ %.2f", symbol, quantity, entry_price)
+
     def _compute_nav(self) -> float:
         positions_value = sum(
             p.current_price * p.quantity
@@ -250,22 +268,24 @@ class PortfolioTracker:
 
     def compute_composite_score(self) -> float:
         """Competition composite: 0.4 * Sortino + 0.3 * Sharpe + 0.3 * Calmar."""
-        sortino = self.compute_sortino()
-        sharpe = self.compute_sharpe()
-        calmar = self.compute_calmar()
+        MAX_METRIC = 20.0
+        sortino = min(MAX_METRIC, self.compute_sortino())
+        sharpe = min(MAX_METRIC, self.compute_sharpe())
+        calmar = min(MAX_METRIC, self.compute_calmar())
         return 0.4 * sortino + 0.3 * sharpe + 0.3 * calmar
 
     def compute_risk_metrics(self) -> RiskMetrics:
         """Compute all risk-adjusted metrics at once."""
+        MAX_METRIC = 20.0
         returns = self._daily_returns()
         nav = self._compute_nav()
         total_return_pct = ((nav - self._initial_nav) / self._initial_nav) * 100
         n_days = len(returns)
         annualized_return = (total_return_pct / 100) * (365.0 / max(n_days, 1))
 
-        sharpe = self.compute_sharpe()
-        sortino = self.compute_sortino()
-        calmar = self.compute_calmar()
+        sharpe = min(MAX_METRIC, self.compute_sharpe())
+        sortino = min(MAX_METRIC, self.compute_sortino())
+        calmar = min(MAX_METRIC, self.compute_calmar())
         composite = 0.4 * sortino + 0.3 * sharpe + 0.3 * calmar
 
         return RiskMetrics(

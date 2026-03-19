@@ -21,6 +21,7 @@ from typing import Optional
 
 import yaml
 
+from core.models import StrategyState
 from data.buffer import LiveBuffer
 from data.connector import WSConnector, BinanceSupplementaryFeed
 from data.sim_feed import SimulatedFeed
@@ -110,11 +111,64 @@ def _apply_env_overrides(config: dict) -> None:
         exchange_cfg["api_secret"] = os.environ["BINANCE_API_SECRET"]
 
 
+def _validate_roostoo_config(config: dict) -> None:
+    """Validate Roostoo API credentials are present. Raises SystemExit if missing."""
+    roostoo_cfg = config.get("roostoo", {})
+    api_key = roostoo_cfg.get("api_key", "")
+    api_secret = roostoo_cfg.get("api_secret", "")
+    if not api_key or not api_secret:
+        logger.error(
+            "Roostoo API credentials missing. Set ROOSTOO_API_KEY and ROOSTOO_API_SECRET "
+            "in .env or environment variables."
+        )
+        raise SystemExit(1)
+
+
+def _validate_config(config: dict) -> None:
+    """Validate config values are in sane ranges. Raises SystemExit on invalid config."""
+    alpha_cfg = config.get("alpha", {})
+    strategy_cfg = config.get("strategy", {})
+    risk_cfg = config.get("risk", {})
+
+    errors = []
+
+    entry = alpha_cfg.get("entry_threshold", 0.6)
+    exit_ = alpha_cfg.get("exit_threshold", -0.2)
+    if not (0.0 <= entry <= 1.0):
+        errors.append(f"alpha.entry_threshold={entry} must be in [0, 1]")
+    if exit_ >= entry:
+        errors.append(f"alpha.exit_threshold={exit_} must be less than entry_threshold={entry}")
+
+    dd_limit = risk_cfg.get("daily_drawdown_limit", 0.05)
+    if not (0.0 < dd_limit < 1.0):
+        errors.append(f"risk.daily_drawdown_limit={dd_limit} must be in (0, 1)")
+
+    max_port = risk_cfg.get("max_portfolio_exposure", 0.5)
+    if not (0.0 < max_port <= 1.0):
+        errors.append(f"risk.max_portfolio_exposure={max_port} must be in (0, 1]")
+
+    max_single = risk_cfg.get("max_single_exposure", 0.15)
+    if not (0.0 < max_single <= 1.0):
+        errors.append(f"risk.max_single_exposure={max_single} must be in (0, 1]")
+
+    base_size = strategy_cfg.get("base_size_pct", 0.05)
+    max_size = strategy_cfg.get("max_size_pct", 0.15)
+    if base_size > max_size:
+        errors.append(f"strategy.base_size_pct={base_size} must be <= max_size_pct={max_size}")
+
+    if errors:
+        for e in errors:
+            logger.error("Config error: %s", e)
+        raise SystemExit(1)
+
+
 async def main(config: dict) -> None:
     mode = config.get("mode", "paper")
     logger.info("=== Trading Competition Framework ===")
     logger.info("Mode: %s", mode)
     logger.info("Symbols: %d pairs", len(config.get("symbols", [])))
+
+    _validate_config(config)
 
     # ── Build Components ──
 
@@ -140,6 +194,7 @@ async def main(config: dict) -> None:
     if mode == "paper":
         executor = SimExecutor(paper_cfg, buffer)
     elif mode == "roostoo":
+        _validate_roostoo_config(config)
         roostoo_cfg = config.get("roostoo", {})
         roostoo_exec = RoostooExecutor(roostoo_cfg)
         roostoo_exec.set_trade_logger(trade_logger)
@@ -285,6 +340,25 @@ async def main(config: dict) -> None:
         icir_tracker=icir_tracker,
     )
 
+    # 11b. Position recovery on restart (Roostoo mode only)
+    if mode == "roostoo" and isinstance(executor, RoostooExecutor):
+        for asset, qty in balances.items():
+            if asset == "USD" or qty <= 0:
+                continue
+            symbol = f"{asset}/USDT"
+            if symbol not in config.get("symbols", []):
+                logger.warning("Skipping unknown asset %s during position recovery", asset)
+                continue
+            ticker_price = await executor.get_ticker(symbol)
+            if ticker_price and ticker_price > 0:
+                tracker.restore_position(symbol, qty, entry_price=ticker_price)
+                if symbol in monitor.strategies:
+                    monitor.strategies[symbol]._state = StrategyState.HOLDING
+                    monitor.strategies[symbol]._entry_price = ticker_price
+                logger.info("Recovered position: %s qty=%.6f @ $%.2f", symbol, qty, ticker_price)
+            else:
+                logger.warning("Could not get ticker for %s, skipping position recovery", symbol)
+
     # ── Graceful Shutdown ──
     shutdown_event = asyncio.Event()
 
@@ -314,10 +388,19 @@ async def main(config: dict) -> None:
         # Periodic NAV snapshot task
         async def nav_snapshot_loop():
             iteration = 0
+            last_date = datetime.utcnow().strftime("%Y-%m-%d")
             while not shutdown_event.is_set():
                 await asyncio.sleep(60)  # every minute
                 iteration += 1
                 tracker.record_nav_snapshot()
+
+                # Backup daily reset (in case monitor misses it)
+                current_date = datetime.utcnow().strftime("%Y-%m-%d")
+                if current_date != last_date:
+                    logger.info("NAV loop: day boundary %s → %s, resetting daily state", last_date, current_date)
+                    risk_shield.reset_daily()
+                    tracker.reset_daily()
+                    last_date = current_date
 
                 if iteration % METRICS_LOG_INTERVAL == 0:
                     metrics = tracker.compute_risk_metrics()

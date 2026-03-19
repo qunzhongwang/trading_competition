@@ -60,6 +60,7 @@ class StrategyLogic:
 
         # Track entry price for adaptive Kelly (read before tracker zeroes it on sell)
         self._entry_price: float = 0.0
+        self._initial_hold_qty: float = 0.0
 
         # Optional TradeTracker for adaptive Kelly (injected after init)
         self._trade_tracker = None
@@ -97,6 +98,12 @@ class StrategyLogic:
                 effective_alpha = signal.alpha_score
             # Always append effective alpha to history for confirmation tracking
             self._alpha_history.append(effective_alpha)
+
+            # Clear streak if alpha drops below entry threshold
+            if effective_alpha <= self._entry_threshold and len(self._alpha_history) > 0:
+                # Check if the previous values formed a streak that's now broken
+                if any(a > self._entry_threshold for a in list(self._alpha_history)[:-1]):
+                    self._alpha_history.clear()
 
             if self._confirmed_entry():
                 qty = self._compute_buy_quantity(
@@ -320,4 +327,5 @@ class StrategyLogic:
 
         allocation = portfolio.nav * position_pct
         allocation = min(allocation, portfolio.cash * 0.99)
-        return allocation / current_price
+        allocation = max(0.0, allocation)
+        return allocation / current_price if allocation > 0 else 0.0

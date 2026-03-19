@@ -99,18 +99,32 @@ class RoostooExecutor(BaseExecutor):
 
         if data and data.get("Success"):
             order_data = data.get("data", {})
-            order.status = OrderStatus.FILLED
+            executed_qty = float(order_data.get("executedQty", order.quantity))
             order.filled_price = float(order_data.get("price", order.price or 0))
-            order.filled_quantity = float(order_data.get("executedQty", order.quantity))
+            order.filled_quantity = executed_qty
             order.filled_at = datetime.utcnow()
-            logger.info(
-                "Roostoo order filled: %s %s %.6f @ %.2f (latency %.0fms)",
-                order.side.value,
-                order.symbol,
-                order.filled_quantity,
-                order.filled_price,
-                latency_ms,
-            )
+            # Detect partial fills
+            if abs(executed_qty - order.quantity) > 1e-10 and executed_qty < order.quantity:
+                order.status = OrderStatus.PARTIALLY_FILLED
+                logger.info(
+                    "Roostoo order partially filled: %s %s %.6f/%.6f @ %.2f (latency %.0fms)",
+                    order.side.value,
+                    order.symbol,
+                    executed_qty,
+                    order.quantity,
+                    order.filled_price,
+                    latency_ms,
+                )
+            else:
+                order.status = OrderStatus.FILLED
+                logger.info(
+                    "Roostoo order filled: %s %s %.6f @ %.2f (latency %.0fms)",
+                    order.side.value,
+                    order.symbol,
+                    order.filled_quantity,
+                    order.filled_price,
+                    latency_ms,
+                )
         elif data and not data.get("Success"):
             order.status = OrderStatus.REJECTED
             err = data.get("ErrMsg", "Unknown error")

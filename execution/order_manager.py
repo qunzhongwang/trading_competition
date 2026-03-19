@@ -25,6 +25,8 @@ class OrderManager:
         self._active_orders: Dict[str, Order] = {}
         self._fill_callbacks: List[Callable[[Order], None]] = []
         self._timeout_seconds = timeout_seconds
+        self._error_counts: Dict[str, int] = {}
+        self._max_errors: int = 5
 
     async def submit(self, order: Order) -> Order:
         """Submit order to executor and handle the result."""
@@ -102,8 +104,23 @@ class OrderManager:
                     to_remove.append(order_id)
                 elif updated.status == OrderStatus.CANCELLED:
                     to_remove.append(order_id)
+                self._error_counts.pop(order_id, None)
             except Exception as e:
                 logger.error("Error checking order %s: %s", order_id, e)
+                self._error_counts[order_id] = self._error_counts.get(order_id, 0) + 1
+                if self._error_counts[order_id] >= self._max_errors:
+                    logger.warning(
+                        "Order %s failed status check %d times, removing as CANCELLED",
+                        order_id,
+                        self._max_errors,
+                    )
+                    order.status = OrderStatus.CANCELLED
+                    to_remove.append(order_id)
+                    for cb in self._fill_callbacks:
+                        try:
+                            cb(order)
+                        except Exception as cb_err:
+                            logger.error("Callback error on stuck order removal: %s", cb_err)
 
         for order_id in to_remove:
             self._active_orders.pop(order_id, None)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from typing import Dict, Optional, Set
 
 from core.models import OHLCV, Order, OrderStatus, StrategyState
@@ -73,6 +74,9 @@ class StrategyMonitor:
             "seq_len", 30
         )
 
+        # Day boundary tracking for circuit breaker / tracker daily reset
+        self._last_trading_date: Optional[str] = None
+
         # ICIR tracking: store previous factors per symbol for online learning
         self._prev_factors: Dict[str, list] = {}
         self._prev_prices: Dict[str, float] = {}
@@ -89,11 +93,18 @@ class StrategyMonitor:
                 continue
 
             iteration += 1
-            await self._process_iteration(iteration)
+            try:
+                await self._process_iteration(iteration)
+            except Exception:
+                logger.exception("Error in iteration %d, continuing", iteration)
 
     async def stop(self) -> None:
         self._running = False
         logger.info("StrategyMonitor stopped")
+
+    @property
+    def strategies(self) -> Dict[str, StrategyLogic]:
+        return self._strategies
 
     async def _process_iteration(self, iteration: int) -> None:
         """Process one iteration: for each symbol, run the full pipeline.
@@ -102,6 +113,14 @@ class StrategyMonitor:
         Alpha scoring and trade decisions only run when the resampler emits
         a completed N-min bar (or every candle if no resampler).
         """
+        # Day boundary detection — reset circuit breaker and daily PnL at midnight UTC
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        if self._last_trading_date is not None and today != self._last_trading_date:
+            logger.info("Day boundary crossed: %s → %s, resetting daily state", self._last_trading_date, today)
+            self._risk_shield.reset_daily()
+            self._tracker.reset_daily()
+        self._last_trading_date = today
+
         # Check pending limit orders for fills
         await self._order_manager.check_pending()
 

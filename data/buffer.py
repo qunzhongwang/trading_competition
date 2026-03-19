@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections import deque
 from typing import Dict, List, Optional
 
@@ -34,6 +35,11 @@ class LiveBuffer:
         self._event = asyncio.Event()
         # Resampled candle storage: {minutes: {symbol: deque[OHLCV]}}
         self._resampled: Dict[int, Dict[str, deque]] = {}
+        # Staleness tracking: symbol → monotonic timestamp of last candle push
+        self._last_candle_time: Dict[str, float] = {}
+        # Supplementary data staleness
+        self._supp_last_update: Dict[str, float] = {}
+        self._supp_stale_threshold: float = 300.0  # 5 minutes
 
     async def push_tick(self, tick: Tick) -> None:
         async with self._lock:
@@ -46,6 +52,7 @@ class LiveBuffer:
             if candle.symbol not in self._candles:
                 self._candles[candle.symbol] = deque(maxlen=self._max_candles)
             self._candles[candle.symbol].append(candle)
+            self._last_candle_time[candle.symbol] = time.monotonic()
         if candle.is_closed:
             self._event.set()
             logger.debug(
@@ -95,6 +102,7 @@ class LiveBuffer:
             if symbol not in self._obi_history:
                 self._obi_history[symbol] = deque(maxlen=self._max_candles)
             self._obi_history[symbol].append(imbalance)
+            self._supp_last_update[f"{symbol}:depth"] = time.monotonic()
 
     async def push_funding(self, symbol: str, rate: float) -> None:
         """Store latest funding rate."""
@@ -103,6 +111,7 @@ class LiveBuffer:
             if symbol not in self._funding_history:
                 self._funding_history[symbol] = deque(maxlen=self._max_candles)
             self._funding_history[symbol].append(rate)
+            self._supp_last_update[f"{symbol}:funding"] = time.monotonic()
 
     async def push_taker_ratio(self, symbol: str, ratio: float) -> None:
         """Store latest taker buy/sell ratio."""
@@ -111,10 +120,23 @@ class LiveBuffer:
             if symbol not in self._taker_history:
                 self._taker_history[symbol] = deque(maxlen=self._max_candles)
             self._taker_history[symbol].append(ratio)
+            self._supp_last_update[f"{symbol}:taker"] = time.monotonic()
 
     async def get_supplementary(self, symbol: str) -> dict:
         """Get all supplementary data for a symbol."""
         async with self._lock:
+            # Warn if supplementary data is stale
+            now = time.monotonic()
+            for key_suffix in ("depth", "funding", "taker"):
+                key = f"{symbol}:{key_suffix}"
+                last = self._supp_last_update.get(key)
+                if last is not None and (now - last) > self._supp_stale_threshold:
+                    logger.warning(
+                        "Stale supplementary data for %s: %s last updated %.0fs ago",
+                        symbol,
+                        key_suffix,
+                        now - last,
+                    )
             depth = self._depth_data.get(symbol, {})
             return {
                 "order_book_imbalance": depth.get("order_book_imbalance", 0.0),
@@ -160,3 +182,13 @@ class LiveBuffer:
 
     def symbols(self) -> List[str]:
         return list(self._candles.keys())
+
+    def seconds_since_last_candle(self, symbol: str) -> float:
+        """Return seconds since the last candle was pushed for this symbol.
+
+        Returns float('inf') if no candle has been received for the symbol.
+        """
+        last = self._last_candle_time.get(symbol)
+        if last is None:
+            return float("inf")
+        return time.monotonic() - last
