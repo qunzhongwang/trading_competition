@@ -4,25 +4,89 @@ Algorithmic trading bot for the Roostoo 10-day crypto trading competition. Long-
 
 **Architecture:** Binance WebSocket for real-time OHLCV data (high quality, free). Roostoo REST API for order execution and balance tracking on the mock exchange.
 
-## Quick Start
+## Competition Quick Start (5 minutes)
+
+Get the bot running in Roostoo competition mode as fast as possible:
 
 ```bash
-# 1. Clone and enter the repo
+# 1. Clone, install, activate
 git clone <repo-url> && cd trading-competition
+curl -LsSf https://astral.sh/uv/install.sh | sh  # skip if you have uv
+uv venv .venv && source .venv/bin/activate && uv sync
 
-# 2. Install uv (if you don't have it)
-curl -LsSf https://astral.sh/uv/install.sh | sh
+# 2. Set up API credentials
+cp .env.example .env
+# Edit .env — fill in your Roostoo API key and secret:
+#   ROOSTOO_API_KEY=your_key_here
+#   ROOSTOO_API_SECRET=your_secret_here
+# For the actual competition, use ROOSTOO_COMP_API_KEY / ROOSTOO_COMP_API_SECRET instead
 
-# 3. Create venv and install all dependencies
-uv venv .venv
-source .venv/bin/activate
-uv sync
+# 3. (Optional) Train LSTM model — skip to use rule-based alpha engine
+python -m models.train --synthetic --symbols BTC/USDT --device auto
+# Then set alpha.engine to "lstm" or "ensemble" in config/default.yaml
 
-# 4. Run in paper mode (no exchange keys needed)
+# 4. Verify everything works (dry run with paper mode)
+python main.py  # Ctrl+C after a few minutes — check for errors
+
+# 5. Start competition mode
+python main.py --mode roostoo
+# Or use the auto-restart script:
+./scripts/start_competition.sh
+```
+
+### Deploy to AWS EC2 (recommended for 10-day competition)
+
+```bash
+# One-command deploy: installs Python 3.11, uv, clones repo, sets up systemd
+./scripts/deploy_aws.sh <EC2_HOST> [~/.ssh/your-key.pem]
+
+# SSH in and set API keys
+ssh -i ~/.ssh/your-key.pem ubuntu@<EC2_HOST>
+cat > /home/ubuntu/trading_competition/.env << 'EOF'
+ROOSTOO_COMP_API_KEY=your_competition_key
+ROOSTOO_COMP_API_SECRET=your_competition_secret
+EOF
+
+# Start (systemd — auto-restarts on crash)
+sudo systemctl start trading-bot
+
+# Monitor
+journalctl -u trading-bot -f                          # system logs
+tail -f /home/ubuntu/trading_competition/logs/trades_*.jsonl  # trade events
+```
+
+### Pre-Competition Checklist
+
+| Step | Command / Action | Status |
+|------|-----------------|--------|
+| Install dependencies | `uv sync` | |
+| Set API credentials in `.env` | Use `ROOSTOO_COMP_*` keys for competition | |
+| Choose alpha engine | Set `alpha.engine` in `config/default.yaml` (`rule_based` / `lstm` / `ensemble`) | |
+| Train model (if using LSTM) | `python -m models.train --synthetic --device auto` | |
+| Paper test run (1+ hours) | `python main.py` — verify no crashes, check logs | |
+| Roostoo test run | `python main.py --mode roostoo` — verify orders execute | |
+| Run tests | `pytest` — all 210 tests should pass | |
+| Deploy to EC2 | `./scripts/deploy_aws.sh <host>` | |
+| Set EC2 API keys | SSH in, create `.env` with competition keys | |
+| Start bot | `sudo systemctl start trading-bot` | |
+| Monitor first hour | `journalctl -u trading-bot -f` — watch for fills and risk metrics | |
+
+### Credential Priority
+
+The `.env` file supports two sets of Roostoo credentials. Competition keys take priority if both are set:
+
+1. **Competition API** (`ROOSTOO_COMP_API_KEY` / `ROOSTOO_COMP_API_SECRET`): Use these during the actual competition (Mar 21-31)
+2. **Testing API** (`ROOSTOO_API_KEY` / `ROOSTOO_API_SECRET`): For pre-competition testing against the mock exchange
+
+## Paper Mode Quick Start
+
+```bash
+# No API keys needed — generates synthetic price data
+uv venv .venv && source .venv/bin/activate && uv sync
 python main.py
 ```
 
-That's it. The bot will generate synthetic price data and trade against it. Press `Ctrl+C` to stop — it prints a final PnL report with risk metrics on shutdown.
+Press `Ctrl+C` to stop — prints a final PnL report with risk metrics on shutdown.
 
 ### Docker (alternative)
 
@@ -41,23 +105,6 @@ docker run --rm -e BINANCE_API_KEY=... -e BINANCE_API_SECRET=... trading-bot --m
 ```
 
 ## Roostoo Competition Mode
-
-### Setup
-
-```bash
-# 1. Copy the example env and fill in your API keys
-cp .env.example .env
-# Edit .env with your Roostoo API credentials
-
-# 2. Test locally
-python main.py --mode roostoo
-
-# 3. Deploy to AWS EC2 (see below)
-```
-
-The `.env` file supports two sets of Roostoo credentials:
-- **Testing API** (`ROOSTOO_API_KEY` / `ROOSTOO_API_SECRET`): General portfolio testing against the mock exchange
-- **Competition API** (`ROOSTOO_COMP_API_KEY` / `ROOSTOO_COMP_API_SECRET`): Reserved for the live competition — swap these in when received
 
 ### How Roostoo Mode Works
 
@@ -95,35 +142,7 @@ Binance WebSocket ──(real-time 1m candles)──> LiveBuffer ──> Strateg
 
 ### AWS EC2 Deployment
 
-```bash
-# 1. Deploy to EC2 (installs Python 3.11, uv, clones repo, sets up systemd)
-./scripts/deploy_aws.sh <EC2_HOST> [~/.ssh/your-key.pem]
-
-# 2. SSH into EC2 and set up API keys
-ssh -i ~/.ssh/your-key.pem ubuntu@<EC2_HOST>
-cat > /home/ubuntu/trading_competition/.env << 'EOF'
-ROOSTOO_API_KEY=your_key_here
-ROOSTOO_API_SECRET=your_secret_here
-EOF
-
-# 3. Start the bot (systemd — auto-restarts on crash)
-sudo systemctl start trading-bot
-
-# 4. Monitor logs
-journalctl -u trading-bot -f
-
-# Or check trade logs
-tail -f /home/ubuntu/trading_competition/logs/trades_*.jsonl
-```
-
-Alternative — run directly without systemd:
-
-```bash
-# On EC2
-cd /home/ubuntu/trading_competition
-./scripts/start_competition.sh
-# Includes auto-restart (max 5 retries with backoff)
-```
+See [Competition Quick Start > Deploy to AWS EC2](#deploy-to-aws-ec2-recommended-for-10-day-competition) above for full deployment instructions.
 
 ## Scripts
 
