@@ -11,9 +11,11 @@ dependencies = [
     "onnxruntime>=1.19,<=1.23.2",
     "onnxscript>=0.6.2",
     "pandas>=2.3.3",
+    "pre-commit>=4.5.1",
     "pydantic>=2.12.5",
     "pyyaml>=6.0.3",
     "torch>=2.10.0",
+    "tqdm>=4.67.3",
     "wandb>=0.25.1",
     "websockets>=16.0",
 ]
