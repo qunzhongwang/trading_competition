@@ -109,6 +109,7 @@ Each layer narrows ambiguity instead of mixing reasoning, sizing, and execution 
 
 - `data/resampler.py` converts 1-minute candles into 5m and higher-timeframe bars.
 - `strategy/monitor.py` only runs the decision pipeline when the primary resampled bar closes.
+- `main.py` replays prefetched 1-minute history through the resampler on startup so 5m / 15m / 1h buffers are warm before the first live trading decision.
 - Price updates and stop checks still happen on the 1-minute stream.
 
 This gives two useful properties:
@@ -163,6 +164,8 @@ The snapshot exposes:
 - `models/inference.py` provides `AlphaEngine`
 - `models/model_wrapper.py` loads `.onnx` or `.pt` checkpoints
 - `strategy/monitor.py` only uses the model overlay when `strategy.use_model_overlay=true`
+- the overlay now scores on the same primary strategy timeframe as the factor engine, not on mismatched raw 1-minute candles
+- supplementary history passed into the model is aligned to that same strategy cadence
 
 The overlay is not allowed to replace the factor strategy.
 
@@ -183,6 +186,10 @@ Important:
 
 - `strategy/logic.py` consumes a `FactorSnapshot` and emits a `StrategyIntent`
 - the same module converts that intent into a `TradeInstruction`
+- long entries now require breadth by default:
+  - at least `min_supporting_factors=2`
+  - at least `min_supporting_categories=2`
+  - `trend_alignment` present unless explicitly disabled
 
 This is the point where the system decides:
 
@@ -198,6 +205,13 @@ The strategy state machine remains explicit:
 - `FLAT`
 - `LONG_PENDING`
 - `HOLDING`
+- `EXIT_PENDING`
+
+That state machine now treats live partial fills explicitly:
+
+- partial entry fills keep the strategy in `LONG_PENDING` until completion or cancellation
+- factor-driven exits move to `EXIT_PENDING` instead of pretending the position is already flat
+- cancelled exit orders return from `EXIT_PENDING` to `HOLDING`
 
 ### 7. Risk Layer
 
@@ -233,6 +247,7 @@ Paper execution is no longer same-bar optimistic.
 
 - market orders fill on the next candle open with slippage
 - limit orders fill only if the next bar touches the limit price
+- cumulative exchange fill updates are converted into incremental deltas before they hit `PortfolioTracker`, so partial fills do not double-count position or cash changes
 
 That timing discipline makes offline behavior less misleading.
 
@@ -341,6 +356,8 @@ This keeps the architecture stable even as the research surface expands.
 - uses Binance for market data
 - uses Roostoo for execution
 - recovers positions on restart
+- backfills resampled strategy history on startup so factor generation is warm immediately instead of waiting for fresh 5m / 15m / 1h bars
+- keeps sell-side strategy state in `EXIT_PENDING` while Roostoo orders are only partially filled
 - writes structured JSONL logs
 
 Roostoo credentials can come from either:

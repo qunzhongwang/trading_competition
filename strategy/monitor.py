@@ -92,10 +92,10 @@ class StrategyMonitor:
         # Min candles before we start trading (engine-aware)
         engine_type = config.get("alpha", {}).get("engine", "rule_based")
         seq_len = config.get("alpha", {}).get("seq_len", 30)
-        if engine_type in ("lstm", "transformer", "ensemble"):
-            self._warmup_candles = extractor.min_candles + seq_len
+        if self._use_model_overlay and engine_type in ("lstm", "transformer", "ensemble"):
+            self._warmup_candles = (extractor.min_candles + seq_len) * self._primary_minutes
         else:
-            self._warmup_candles = extractor.min_candles
+            self._warmup_candles = extractor.min_candles * self._primary_minutes
 
         # Day boundary tracking for circuit breaker / tracker daily reset
         self._last_trading_date: Optional[str] = None
@@ -249,8 +249,15 @@ class StrategyMonitor:
                 ]
                 self._prev_prices[symbol] = candles[-1].close
 
+            supplementary_history_len = self._alpha_engine._seq_len
+            if self._use_model_overlay and self._primary_minutes > 1:
+                supplementary_history_len *= self._primary_minutes
             supplementary_history = await self._buffer.get_supplementary_history(
-                symbol, self._alpha_engine._seq_len
+                symbol, supplementary_history_len
+            )
+            model_supplementary_history = self._align_supplementary_history(
+                supplementary_history,
+                seq_len=self._alpha_engine._seq_len,
             )
 
             # Fetch higher-TF candles for multi-TF filter
@@ -276,9 +283,9 @@ class StrategyMonitor:
             model_signal = None
             if self._use_model_overlay:
                 model_signal = self._alpha_engine.score(
-                    candles,
+                    strategy_candles,
                     supplementary=supplementary,
-                    supplementary_history=supplementary_history,
+                    supplementary_history=model_supplementary_history,
                     candles_15m=candles_15m,
                     candles_1h=candles_1h,
                 )
@@ -389,6 +396,33 @@ class StrategyMonitor:
                 except Exception:
                     logger.warning("Roostoo balance fetch failed", exc_info=True)
 
+    def _align_supplementary_history(
+        self,
+        history: dict,
+        seq_len: int,
+    ) -> dict:
+        """Align raw per-minute supplementary history to the strategy timeframe."""
+        if self._primary_minutes <= 1:
+            return {
+                key: list(values)[-seq_len:]
+                for key, values in history.items()
+            }
+
+        aligned = {}
+        for key, values in history.items():
+            series = list(values)
+            if not series:
+                aligned[key] = []
+                continue
+            sampled = []
+            idx = len(series) - 1
+            while idx >= 0 and len(sampled) < seq_len:
+                sampled.append(series[idx])
+                idx -= self._primary_minutes
+            sampled.reverse()
+            aligned[key] = sampled
+        return aligned
+
     async def _liquidate_all(self) -> None:
         """Emergency liquidation: sell all positions."""
         logger.critical("LIQUIDATING ALL POSITIONS")
@@ -411,7 +445,7 @@ class StrategyMonitor:
     def _on_order_event(self, order: Order) -> None:
         """Callback for order fill/cancel events."""
         if order.symbol in self._strategies:
-            if order.status == OrderStatus.FILLED:
+            if order.status in (OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED):
                 self._strategies[order.symbol].on_fill(order)
             elif order.status in (OrderStatus.CANCELLED, OrderStatus.REJECTED):
                 self._strategies[order.symbol].on_cancel(order)

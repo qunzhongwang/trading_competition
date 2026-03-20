@@ -124,6 +124,9 @@ strategy:
   min_entry_score: 0.62
   max_blocker_score: 0.35
   min_exit_score: 0.55
+  min_supporting_factors: 2
+  min_supporting_categories: 2
+  require_trend_alignment: true
   urgent_entry_score: 0.82
   signal_horizon_minutes: 240
   exit_horizon_minutes: 30

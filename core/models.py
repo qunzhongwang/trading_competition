@@ -32,6 +32,7 @@ class StrategyState(str, Enum):
     FLAT = "FLAT"
     LONG_PENDING = "LONG_PENDING"
     HOLDING = "HOLDING"
+    EXIT_PENDING = "EXIT_PENDING"
 
 
 class FactorBias(str, Enum):

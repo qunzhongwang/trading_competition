@@ -177,6 +177,37 @@ def _resolve_roostoo_starting_capital(
     return default_capital
 
 
+async def _backfill_resampled_history(
+    buffer: LiveBuffer,
+    symbols: list[str],
+    *,
+    resampler: Optional[CandleResampler] = None,
+    multi_resampler: Optional[MultiResampler] = None,
+) -> None:
+    """Replay prefetched 1m candles through the live resampler state.
+
+    Prefetch only seeds raw candles in the buffer. The strategy, however, trades
+    on completed higher-timeframe bars. Replaying the prefetched history here
+    keeps the resampler state and the stored resampled buffers in sync so the
+    strategy does not start from an empty 5m/15m/1h context.
+    """
+    if resampler is None and multi_resampler is None:
+        return
+
+    for symbol in symbols:
+        candles = await buffer.get_candles(symbol)
+        for candle in candles:
+            if multi_resampler is not None:
+                completed = multi_resampler.push(candle)
+                for period, bar in completed.items():
+                    if bar is not None:
+                        await buffer.push_resampled(period, bar)
+            elif resampler is not None:
+                completed = resampler.push(candle)
+                if completed is not None:
+                    await buffer.push_resampled(resampler.minutes, completed)
+
+
 async def main(config: dict) -> None:
     mode = config.get("mode", "paper")
     logger.info("=== Trading Competition Framework ===")
@@ -208,9 +239,12 @@ async def main(config: dict) -> None:
         engine_type = config.get("alpha", {}).get("engine", "rule_based")
         seq_len = config.get("alpha", {}).get("seq_len", 30)
         resample_minutes = config.get("alpha", {}).get("resample_minutes", 1)
+        use_model_overlay = config.get("strategy", {}).get("use_model_overlay", False)
         strategy_lookback = (_tmp_extractor.min_candles + 10) * max(resample_minutes, 1)
-        if engine_type in ("lstm", "transformer", "ensemble"):
-            model_lookback = seq_len + _tmp_extractor.min_candles + 10
+        if use_model_overlay and engine_type in ("lstm", "transformer", "ensemble"):
+            model_lookback = (
+                seq_len + _tmp_extractor.min_candles + 10
+            ) * max(resample_minutes, 1)
             n_prefetch = max(strategy_lookback, model_lookback)
         else:
             n_prefetch = strategy_lookback
@@ -309,6 +343,14 @@ async def main(config: dict) -> None:
             "Multi-timeframe resampler: periods=%s (primary=%d)",
             all_periods,
             multi_resampler.primary_minutes,
+        )
+
+    if mode != "paper":
+        await _backfill_resampled_history(
+            buffer,
+            config.get("symbols", []),
+            resampler=resampler,
+            multi_resampler=multi_resampler,
         )
 
     # 10c. ICIR tracker (optional, for per-symbol adaptive weights)

@@ -1,6 +1,7 @@
 """Tests for execution/order_manager.py — OrderManager lifecycle and callbacks."""
 
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 
@@ -61,6 +62,70 @@ class TestSubmit:
         assert result.status == OrderStatus.SUBMITTED
         assert manager.has_pending is True
         assert order.order_id in manager.active_orders
+
+    async def test_cumulative_partial_fills_use_deltas_even_when_executor_mutates_in_place(
+        self, tracker
+    ):
+        class _MutatingExecutor:
+            def __init__(self):
+                self._order = None
+                self._updates = iter(
+                    [
+                        SimpleNamespace(
+                            status=OrderStatus.PARTIALLY_FILLED,
+                            filled_quantity=0.4,
+                            filled_price=100.0,
+                        ),
+                        SimpleNamespace(
+                            status=OrderStatus.FILLED,
+                            filled_quantity=1.0,
+                            filled_price=101.2,
+                        ),
+                    ]
+                )
+
+            async def execute(self, order):
+                self._order = order
+                order.status = OrderStatus.SUBMITTED
+                return order
+
+            async def get_status(self, order_id, symbol):
+                update = next(self._updates)
+                self._order.status = update.status
+                self._order.filled_quantity = update.filled_quantity
+                self._order.filled_price = update.filled_price
+                return self._order
+
+            async def cancel(self, order_id, symbol):
+                self._order.status = OrderStatus.CANCELLED
+                return self._order
+
+        fills = []
+        executor = _MutatingExecutor()
+        mgr = OrderManager(executor, tracker)
+        mgr.register_fill_callback(lambda order: fills.append(order))
+
+        order = Order(
+            symbol="BTC/USDT",
+            side=Side.BUY,
+            order_type=OrderType.MARKET,
+            quantity=1.0,
+        )
+        await mgr.submit(order)
+        await mgr.check_pending()
+        await mgr.check_pending()
+
+        pos = tracker.get_position("BTC/USDT")
+        assert pos.quantity == pytest.approx(1.0)
+        assert [fill.status for fill in fills] == [
+            OrderStatus.PARTIALLY_FILLED,
+            OrderStatus.FILLED,
+        ]
+        assert [fill.filled_quantity for fill in fills] == [
+            pytest.approx(0.4),
+            pytest.approx(0.6),
+        ]
+        assert fills[-1].filled_price == pytest.approx(102.0)
 
 
 @pytest.mark.asyncio

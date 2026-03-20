@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime
-from typing import List
+from typing import List, Set
 
 import websockets
 
@@ -32,15 +32,26 @@ class WSConnector:
         self._reconnect_delay: float = 1.0
         self._max_reconnect_delay: float = 60.0
         self._running = False
+        self._tasks: List[asyncio.Task] = []
+        self._connections: Set[object] = set()
 
     async def start(self) -> None:
         """Launch one WebSocket task per symbol stream."""
         self._running = True
-        tasks = [self._listen(sym) for sym in self._symbols]
-        await asyncio.gather(*tasks)
+        self._tasks = [asyncio.create_task(self._listen(sym)) for sym in self._symbols]
+        try:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
+        finally:
+            self._tasks = []
 
     async def stop(self) -> None:
         self._running = False
+        await self._close_connections()
+        if self._tasks:
+            for task in self._tasks:
+                task.cancel()
+            await asyncio.gather(*self._tasks, return_exceptions=True)
+            self._tasks = []
 
     async def _listen(self, symbol: str) -> None:
         """Main loop: connect, subscribe, parse messages."""
@@ -54,17 +65,21 @@ class WSConnector:
             try:
                 logger.info("Connecting to %s", url)
                 async with websockets.connect(url) as ws:
+                    self._connections.add(ws)
                     delay = self._reconnect_delay  # reset on success
                     logger.info("Connected: %s", stream_name)
 
-                    async for raw_msg in ws:
-                        if not self._running:
-                            break
-                        try:
-                            msg = json.loads(raw_msg)
-                            await self._handle_message(msg, symbol)
-                        except json.JSONDecodeError:
-                            logger.warning("Invalid JSON: %s", raw_msg[:100])
+                    try:
+                        async for raw_msg in ws:
+                            if not self._running:
+                                break
+                            try:
+                                msg = json.loads(raw_msg)
+                                await self._handle_message(msg, symbol)
+                            except json.JSONDecodeError:
+                                logger.warning("Invalid JSON: %s", raw_msg[:100])
+                    finally:
+                        self._connections.discard(ws)
 
             except (websockets.ConnectionClosed, OSError, asyncio.TimeoutError) as e:
                 if not self._running:
@@ -84,6 +99,15 @@ class WSConnector:
                     break
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, self._max_reconnect_delay)
+
+    async def _close_connections(self) -> None:
+        if not self._connections:
+            return
+        await asyncio.gather(
+            *(ws.close() for ws in list(self._connections)),
+            return_exceptions=True,
+        )
+        self._connections.clear()
 
     async def _handle_message(self, msg: dict, symbol: str) -> None:
         """Parse Binance kline message and push to buffer."""
@@ -119,19 +143,30 @@ class BinanceSupplementaryFeed:
         self._symbols = symbols
         self._buffer = buffer
         self._running = False
+        self._tasks: List[asyncio.Task] = []
+        self._connections: Set[object] = set()
 
     async def start(self) -> None:
         self._running = True
-        tasks = [
+        self._tasks = [
             asyncio.create_task(self._listen_depth()),
             asyncio.create_task(self._listen_funding()),
             asyncio.create_task(self._poll_taker_ratio()),
             asyncio.create_task(self._poll_open_interest()),
         ]
-        await asyncio.gather(*tasks, return_exceptions=True)
+        try:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
+        finally:
+            self._tasks = []
 
     async def stop(self) -> None:
         self._running = False
+        await self._close_connections()
+        if self._tasks:
+            for task in self._tasks:
+                task.cancel()
+            await asyncio.gather(*self._tasks, return_exceptions=True)
+            self._tasks = []
 
     async def _listen_depth(self) -> None:
         """Subscribe to order book depth for all symbols."""
@@ -143,20 +178,26 @@ class BinanceSupplementaryFeed:
         while self._running:
             try:
                 async with websockets.connect(url) as ws:
+                    self._connections.add(ws)
                     logger.info("Depth WS connected: %d symbols", len(self._symbols))
-                    while self._running:
-                        msg = await asyncio.wait_for(ws.recv(), timeout=30)
-                        data = json.loads(msg)
-                        # Combined stream format: {"stream": "...", "data": {...}}
-                        if "data" in data:
-                            data = data["data"]
-                        # Convert stream name back to symbol
-                        symbol = self._stream_to_symbol(data.get("s", ""))
-                        if symbol:
-                            await self._buffer.push_depth(
-                                symbol, data.get("bids", []), data.get("asks", [])
-                            )
+                    try:
+                        while self._running:
+                            msg = await asyncio.wait_for(ws.recv(), timeout=30)
+                            data = json.loads(msg)
+                            # Combined stream format: {"stream": "...", "data": {...}}
+                            if "data" in data:
+                                data = data["data"]
+                            # Convert stream name back to symbol
+                            symbol = self._stream_to_symbol(data.get("s", ""))
+                            if symbol:
+                                await self._buffer.push_depth(
+                                    symbol, data.get("bids", []), data.get("asks", [])
+                                )
+                    finally:
+                        self._connections.discard(ws)
             except Exception as e:
+                if not self._running:
+                    break
                 logger.warning("Depth WS error: %s, reconnecting...", e)
                 await asyncio.sleep(5)
 
@@ -170,17 +211,23 @@ class BinanceSupplementaryFeed:
         while self._running:
             try:
                 async with websockets.connect(url) as ws:
+                    self._connections.add(ws)
                     logger.info("Funding WS connected: %d symbols", len(self._symbols))
-                    while self._running:
-                        msg = await asyncio.wait_for(ws.recv(), timeout=30)
-                        data = json.loads(msg)
-                        if "data" in data:
-                            data = data["data"]
-                        symbol = self._stream_to_symbol(data.get("s", ""))
-                        if symbol:
-                            rate = float(data.get("r", 0.0))
-                            await self._buffer.push_funding(symbol, rate)
+                    try:
+                        while self._running:
+                            msg = await asyncio.wait_for(ws.recv(), timeout=30)
+                            data = json.loads(msg)
+                            if "data" in data:
+                                data = data["data"]
+                            symbol = self._stream_to_symbol(data.get("s", ""))
+                            if symbol:
+                                rate = float(data.get("r", 0.0))
+                                await self._buffer.push_funding(symbol, rate)
+                    finally:
+                        self._connections.discard(ws)
             except Exception as e:
+                if not self._running:
+                    break
                 logger.warning("Funding WS error: %s, reconnecting...", e)
                 await asyncio.sleep(5)
 
@@ -242,6 +289,15 @@ class BinanceSupplementaryFeed:
             if sym.replace("/", "") == raw_symbol:
                 return sym
         return ""
+
+    async def _close_connections(self) -> None:
+        if not self._connections:
+            return
+        await asyncio.gather(
+            *(ws.close() for ws in list(self._connections)),
+            return_exceptions=True,
+        )
+        self._connections.clear()
 
 
 async def prefetch_candles(

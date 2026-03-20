@@ -9,6 +9,7 @@ from core.models import (
     FactorBias,
     FactorSnapshot,
     Order,
+    OrderStatus,
     OrderType,
     PortfolioSnapshot,
     Side,
@@ -27,9 +28,12 @@ class StrategyLogic:
 
     State transitions:
         FLAT + alpha > entry_threshold (confirmed N bars) → emit BUY → LONG_PENDING
+        LONG_PENDING + partial fill → LONG_PENDING
         LONG_PENDING + fill → HOLDING
-        LONG_PENDING + cancel/reject → FLAT
-        HOLDING + alpha < exit_threshold → emit SELL → FLAT
+        LONG_PENDING + cancel/reject → FLAT or HOLDING (if partial fill exists)
+        HOLDING + alpha < exit_threshold → emit SELL → EXIT_PENDING
+        EXIT_PENDING + fill → FLAT
+        EXIT_PENDING + cancel/reject → HOLDING
         HOLDING + risk stop → emit SELL → FLAT (handled externally)
     """
 
@@ -95,6 +99,18 @@ class StrategyLogic:
             "model_exit_threshold", -0.10
         )
         self._model_size_weight: float = strategy_cfg.get("model_size_weight", 0.15)
+        self._min_supporting_factors: int = strategy_cfg.get(
+            "min_supporting_factors", 2
+        )
+        self._min_supporting_categories: int = strategy_cfg.get(
+            "min_supporting_categories", 2
+        )
+        self._require_trend_alignment: bool = strategy_cfg.get(
+            "require_trend_alignment", True
+        )
+        self._entry_filled_qty: float = 0.0
+        self._exit_filled_qty: float = 0.0
+        self._exit_fill_notional: float = 0.0
 
     @property
     def state(self) -> StrategyState:
@@ -223,8 +239,17 @@ class StrategyLogic:
                 )
 
         if self._state == StrategyState.FLAT:
-            self._factor_history.append(effective_entry if effective_blocker <= self._max_blocker_score else 0.0)
-            if effective_entry < self._min_entry_score or effective_blocker > self._max_blocker_score:
+            structure_ok = self._entry_structure_ok(factors)
+            self._factor_history.append(
+                effective_entry
+                if effective_blocker <= self._max_blocker_score and structure_ok
+                else 0.0
+            )
+            if (
+                effective_entry < self._min_entry_score
+                or effective_blocker > self._max_blocker_score
+                or not structure_ok
+            ):
                 if any(v >= self._min_entry_score for v in list(self._factor_history)[:-1]):
                     self._factor_history.clear()
                 return None
@@ -327,7 +352,8 @@ class StrategyLogic:
                 effective_blocker,
                 pos_qty,
             )
-            self._state = StrategyState.FLAT
+            self._reset_exit_fill_tracking()
+            self._state = StrategyState.EXIT_PENDING
             return intent
 
         return None
@@ -470,22 +496,53 @@ class StrategyLogic:
             return
 
         if order.side == Side.BUY and self._state == StrategyState.LONG_PENDING:
-            self._state = StrategyState.HOLDING
+            self._record_entry_fill(order)
             self._exit_tier_reached = 0
-            self._entry_price = order.filled_price or 0.0
-            logger.info(
-                "[%s] LONG_PENDING → HOLDING (filled @ %.2f)",
-                self._symbol,
-                order.filled_price,
-            )
+            if order.status == OrderStatus.PARTIALLY_FILLED:
+                logger.info(
+                    "[%s] LONG_PENDING partial fill: qty=%.6f @ %.2f",
+                    self._symbol,
+                    order.filled_quantity,
+                    order.filled_price,
+                )
+            else:
+                self._state = StrategyState.HOLDING
+                logger.info(
+                    "[%s] LONG_PENDING → HOLDING (filled @ %.2f)",
+                    self._symbol,
+                    order.filled_price,
+                )
 
-        elif order.side == Side.SELL:
-            # Record trade for adaptive Kelly BEFORE resetting state
-            if self._trade_tracker is not None and self._entry_price > 0 and order.filled_price:
-                self._trade_tracker.record_trade(self._entry_price, order.filled_price)
-            self._state = StrategyState.FLAT
-            self._entry_price = 0.0
-            logger.info("[%s] → FLAT (sold @ %.2f)", self._symbol, order.filled_price)
+        elif order.side == Side.SELL and self._state in (
+            StrategyState.HOLDING,
+            StrategyState.EXIT_PENDING,
+        ):
+            self._record_exit_fill(order)
+            if order.status == OrderStatus.PARTIALLY_FILLED:
+                self._state = StrategyState.EXIT_PENDING
+                logger.info(
+                    "[%s] EXIT_PENDING partial fill: qty=%.6f @ %.2f",
+                    self._symbol,
+                    order.filled_quantity,
+                    order.filled_price,
+                )
+            else:
+                avg_exit_price = self._average_exit_price()
+                if (
+                    self._trade_tracker is not None
+                    and self._entry_price > 0
+                    and avg_exit_price > 0
+                ):
+                    self._trade_tracker.record_trade(self._entry_price, avg_exit_price)
+                self._state = StrategyState.FLAT
+                self._entry_price = 0.0
+                self._entry_filled_qty = 0.0
+                self._reset_exit_fill_tracking()
+                logger.info(
+                    "[%s] EXIT_PENDING → FLAT (sold @ %.2f)",
+                    self._symbol,
+                    avg_exit_price or (order.filled_price or 0.0),
+                )
 
     def on_cancel(self, order: Order) -> None:
         """Called when an order is cancelled or rejected."""
@@ -493,15 +550,31 @@ class StrategyLogic:
             return
 
         if self._state == StrategyState.LONG_PENDING:
-            self._state = StrategyState.FLAT
-            logger.info("[%s] LONG_PENDING → FLAT (order cancelled)", self._symbol)
+            if order.filled_quantity > 0:
+                self._state = StrategyState.HOLDING
+                logger.info(
+                    "[%s] LONG_PENDING → HOLDING (entry order cancelled after partial fill)",
+                    self._symbol,
+                )
+            else:
+                self._state = StrategyState.FLAT
+                self._entry_price = 0.0
+                self._entry_filled_qty = 0.0
+                logger.info("[%s] LONG_PENDING → FLAT (order cancelled)", self._symbol)
+        elif self._state == StrategyState.EXIT_PENDING:
+            self._state = StrategyState.HOLDING
+            self._reset_exit_fill_tracking()
+            logger.info("[%s] EXIT_PENDING → HOLDING (exit order cancelled)", self._symbol)
 
     def force_flat(self) -> None:
         """Force state to FLAT (used by circuit breaker)."""
         self._state = StrategyState.FLAT
         self._alpha_history.clear()
+        self._factor_history.clear()
         self._exit_tier_reached = 0
         self._entry_price = 0.0
+        self._entry_filled_qty = 0.0
+        self._reset_exit_fill_tracking()
 
     def set_trade_tracker(self, tracker) -> None:
         """Inject TradeTracker for adaptive Kelly sizing."""
@@ -567,6 +640,50 @@ class StrategyLogic:
             if pos.symbol == self._symbol:
                 return pos.quantity
         return 0.0
+
+    def _entry_structure_ok(self, factors: FactorSnapshot) -> bool:
+        bullish_obs = [obs for obs in factors.observations if obs.bias == FactorBias.BULLISH]
+        if len(bullish_obs) < self._min_supporting_factors:
+            return False
+        categories = {obs.category for obs in bullish_obs}
+        if len(categories) < self._min_supporting_categories:
+            return False
+        if self._require_trend_alignment and "trend_alignment" not in factors.supporting_factors:
+            return False
+        return True
+
+    def _record_entry_fill(self, order: Order) -> None:
+        fill_qty = order.filled_quantity or 0.0
+        fill_price = order.filled_price or 0.0
+        if fill_qty <= 0 or fill_price <= 0:
+            return
+        new_total_qty = self._entry_filled_qty + fill_qty
+        if new_total_qty <= 0:
+            return
+        if self._entry_filled_qty > 0 and self._entry_price > 0:
+            old_value = self._entry_price * self._entry_filled_qty
+            new_value = fill_price * fill_qty
+            self._entry_price = (old_value + new_value) / new_total_qty
+        else:
+            self._entry_price = fill_price
+        self._entry_filled_qty = new_total_qty
+
+    def _record_exit_fill(self, order: Order) -> None:
+        fill_qty = order.filled_quantity or 0.0
+        fill_price = order.filled_price or 0.0
+        if fill_qty <= 0 or fill_price <= 0:
+            return
+        self._exit_filled_qty += fill_qty
+        self._exit_fill_notional += fill_qty * fill_price
+
+    def _average_exit_price(self) -> float:
+        if self._exit_filled_qty <= 0:
+            return 0.0
+        return self._exit_fill_notional / self._exit_filled_qty
+
+    def _reset_exit_fill_tracking(self) -> None:
+        self._exit_filled_qty = 0.0
+        self._exit_fill_notional = 0.0
 
     @staticmethod
     def _format_horizon(minutes: int) -> str:

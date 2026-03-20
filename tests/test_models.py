@@ -35,6 +35,7 @@ class TestEnums:
         assert StrategyState.FLAT == "FLAT"
         assert StrategyState.LONG_PENDING == "LONG_PENDING"
         assert StrategyState.HOLDING == "HOLDING"
+        assert StrategyState.EXIT_PENDING == "EXIT_PENDING"
 
 
 class TestOHLCV:

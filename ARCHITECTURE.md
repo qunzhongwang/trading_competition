@@ -117,13 +117,13 @@ main.py
 | --- | --- | --- | --- |
 | `data/connector.py` | 交易所 WS / REST | `OHLCV` 与补充字段 | 接市场数据 |
 | `data/buffer.py` | K 线、depth、funding、taker、OI | 历史窗口与最新快照 | 持有运行时市场状态 |
-| `data/resampler.py` | 1m candles | 5m / 15m / 1h candles | 给策略提供更稳定时间框架 |
+| `data/resampler.py` | 1m candles | 5m / 15m / 1h candles | 给策略提供更稳定时间框架，并在启动时回填高周期上下文 |
 | `features/extractor.py` | candles + supplementary | `FeatureVector` 或 feature sequence | 把市场状态数值化 |
 | `strategy/factor_engine.py` | `FeatureVector` + 高周期上下文 | `FactorSnapshot` | 把特征翻译成可解释因子 |
-| `models/inference.py` | candles + feature sequence | `Signal` | 作为可选 overlay |
-| `strategy/logic.py` | `FactorSnapshot` + portfolio + optional `Signal` | `StrategyIntent` / `TradeInstruction` | 产出交易决定 |
+| `models/inference.py` | strategy timeframe candles + aligned feature sequence | `Signal` | 作为可选 overlay，不能替代因子主策略 |
+| `strategy/logic.py` | `FactorSnapshot` + portfolio + optional `Signal` | `StrategyIntent` / `TradeInstruction` | 产出交易决定，并维护 `FLAT -> LONG_PENDING -> HOLDING -> EXIT_PENDING` 状态机 |
 | `risk/risk_shield.py` | `TradeInstruction -> Order` + portfolio | validated `Order` | 控制暴露、资金、回撤、止损 |
-| `execution/order_manager.py` | validated `Order` | fill / cancel / callback | 统一订单生命周期 |
+| `execution/order_manager.py` | validated `Order` | fill / cancel / callback | 统一订单生命周期，并把累计成交转换成增量成交 |
 | `risk/tracker.py` | fills + price updates | `PortfolioSnapshot` | 维护组合单一真相源 |
 | `execution/trade_logger.py` | 因子、意图、指令、订单、API 事件 | JSONL 日志 | 做审计与复盘 |
 
@@ -186,6 +186,7 @@ while new_closed_candle:
 
 它的价值不在于“复杂”，而在于把正确顺序钉死：
 
+- 启动时先把 prefetched 1m K 线回放进 resampler，避免 5m / 15m / 1h 上下文冷启动
 - 先解释市场
 - 再形成决策
 - 再转换成指令
@@ -234,6 +235,8 @@ flowchart LR
 
 - `models/lstm_model.py` 和 `models/transformer_model.py` 只是结构定义
 - 真正可推理的模型必须通过 `models/model_wrapper.py` 加载外部 `.pt` 或 `.onnx`
+- overlay 现在使用和主策略同一套 primary timeframe candles，不再和 1m 原始流错位
+- 补充特征历史也会先按主策略周期对齐，再送进模型
 
 所以模型在架构里的准确角色是：
 
