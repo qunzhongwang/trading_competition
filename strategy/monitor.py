@@ -411,18 +411,18 @@ class StrategyMonitor:
             self._last_status_log = now
             snap = self._tracker.snapshot()
             holdings = [
-                f"{p.symbol}:{p.quantity:.4f}@{p.current_price:.2f}"
+                f"{p.symbol}:{self._format_quantity(p.quantity)}@{p.current_price:.2f}"
                 for p in snap.positions
                 if p.state == StrategyState.HOLDING
             ]
             logger.info(
-                "Iter %d | NAV=%.2f | Cash=%.2f | PnL=%.2f | DD=%.2f%% | Regime=%s | Holdings=%s",
+                "Iter %d | NAV=%.2f | Cash=%.2f | PnL=%.2f | DD=%.2f%% | %s | Holdings=%s",
                 iteration,
                 snap.nav,
                 snap.cash,
                 snap.daily_pnl,
                 snap.drawdown * 100,
-                (self._latest_market_context or {}).get("regime", "n/a"),
+                self._format_regime_status(self._latest_market_context),
                 holdings or "none",
             )
 
@@ -431,7 +431,10 @@ class StrategyMonitor:
                 try:
                     roostoo_bal = await self._executor.get_balance()
                     if roostoo_bal:
-                        bal_parts = [f"{a}:{v:.4f}" for a, v in roostoo_bal.items()]
+                        bal_parts = [
+                            self._format_balance_item(asset, value)
+                            for asset, value in roostoo_bal.items()
+                        ]
                         logger.info("Roostoo balance | %s", " | ".join(bal_parts))
                     else:
                         logger.warning("Roostoo balance fetch returned empty")
@@ -591,3 +594,28 @@ class StrategyMonitor:
 
         score = ema_spread * 120.0 + features.momentum * 8.0 + hourly_momentum * 10.0
         return max(-1.0, min(1.0, score))
+
+    @staticmethod
+    def _format_quantity(quantity: float) -> str:
+        if quantity >= 100:
+            return f"{quantity:.2f}"
+        if quantity >= 1:
+            return f"{quantity:.4f}"
+        if quantity >= 0.01:
+            return f"{quantity:.6f}"
+        return f"{quantity:.8f}"
+
+    @classmethod
+    def _format_balance_item(cls, asset: str, value: float) -> str:
+        if asset == "USD":
+            return f"{asset}:{value:.2f}"
+        return f"{asset}:{cls._format_quantity(value)}"
+
+    @classmethod
+    def _format_regime_status(cls, market_context: Optional[dict]) -> str:
+        if not market_context:
+            return "Regime=n/a"
+        regime = market_context.get("regime", "n/a")
+        score = float(market_context.get("score", 0.0))
+        breadth = float(market_context.get("breadth", 0.0))
+        return f"Regime={regime}(score={score:.3f}, breadth={breadth:.2f})"

@@ -227,3 +227,15 @@ class TestModelOverlayTimeframe:
         assert len(call["candles"]) == 40
         assert call["candles"][-1].timestamp == base + timedelta(minutes=199)
         assert call["supplementary_history"]["taker_ratio"] == [5.0, 10.0, 15.0, 20.0]
+
+
+class TestMonitorStatusFormatting:
+    def test_formats_tiny_quantities_without_rounding_to_zero(self):
+        assert StrategyMonitor._format_quantity(0.00003) == "0.00003000"
+        assert StrategyMonitor._format_balance_item("BTC", 0.00003) == "BTC:0.00003000"
+
+    def test_formats_regime_status_with_score_and_breadth(self):
+        status = StrategyMonitor._format_regime_status(
+            {"regime": "risk_off", "score": -0.214, "breadth": 0.23}
+        )
+        assert status == "Regime=risk_off(score=-0.214, breadth=0.23)"

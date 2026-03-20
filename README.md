@@ -10,6 +10,28 @@ The model layer is optional. It is no longer the primary strategy trigger. When 
 
 For a Chinese architecture map with diagrams and module I/O contracts, see [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
+## Quick Start
+
+Default Roostoo runtime is pinned to the explicit `regime_trend_v1` profile.
+
+```bash
+cd /Users/kevinwu/Coding/trading_competition
+./scripts/start_competition.sh
+```
+
+Useful monitoring commands:
+
+```bash
+./scripts/status.sh
+tail -f logs/trading_roostoo_*.log
+```
+
+The status log now includes:
+
+- strategy profile
+- current regime plus regime score and breadth
+- adaptive quantity formatting so tiny recovered positions do not appear as `0.0000`
+
 ## Core Architecture
 
 ```text
