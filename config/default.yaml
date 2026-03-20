@@ -77,6 +77,7 @@ roostoo:
   base_url: "https://mock-api.roostoo.com"
   api_key: ""       # env var override: ROOSTOO_API_KEY
   api_secret: ""    # env var override: ROOSTOO_API_SECRET
+  seed_trade_min_position_notional_usd: 1.0
 
 data:
   buffer_size: 1500         # sliding window length (candles) — need 240×5=1200 raw 1-min candles min

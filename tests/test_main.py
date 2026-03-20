@@ -11,6 +11,7 @@ from data.resampler import CandleResampler, MultiResampler
 from main import (
     _apply_strategy_profile,
     _backfill_resampled_history,
+    _has_meaningful_position,
     _resolve_roostoo_starting_capital,
     load_config,
 )
@@ -101,6 +102,23 @@ class TestRoostooStartingCapital:
     def test_falls_back_to_config_capital_when_balance_fetch_failed(self):
         starting = _resolve_roostoo_starting_capital(1_000_000.0, {})
         assert starting == 1_000_000.0
+
+
+class TestMeaningfulPositionThreshold:
+    def test_dust_position_does_not_count(self, portfolio_with_position):
+        snapshot = portfolio_with_position.model_copy(
+            update={
+                "positions": [
+                    portfolio_with_position.positions[0].model_copy(
+                        update={"quantity": 0.00001, "current_price": 50000.0}
+                    )
+                ]
+            }
+        )
+        assert _has_meaningful_position(snapshot, 1.0) is False
+
+    def test_position_above_threshold_counts(self, portfolio_with_position):
+        assert _has_meaningful_position(portfolio_with_position, 1.0) is True
 
 
 class TestResampledHistoryBackfill:

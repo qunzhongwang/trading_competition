@@ -275,6 +275,16 @@ def _resolve_roostoo_starting_capital(
     return default_capital
 
 
+def _has_meaningful_position(snapshot, min_notional_usd: float) -> bool:
+    """Return True if any restored position is large enough to count as active."""
+    for pos in snapshot.positions:
+        if pos.quantity <= 0 or pos.current_price <= 0:
+            continue
+        if pos.quantity * pos.current_price >= min_notional_usd:
+            return True
+    return False
+
+
 async def _backfill_resampled_history(
     buffer: LiveBuffer,
     symbols: list[str],
@@ -529,6 +539,9 @@ async def main(config: dict) -> None:
 
     # 11b. Position recovery on restart (Roostoo mode only)
     if mode == "roostoo" and isinstance(executor, RoostooExecutor):
+        min_seed_position_notional = float(
+            config.get("roostoo", {}).get("seed_trade_min_position_notional_usd", 1.0)
+        )
         for asset, qty in balances.items():
             if asset == "USD" or qty <= 0:
                 continue
@@ -547,10 +560,15 @@ async def main(config: dict) -> None:
                 logger.warning("Could not get ticker for %s, skipping position recovery", symbol)
 
         # 11c. Seed trade — buy $2 of BTC to ensure participation record
-        has_any_position = any(
-            pos.quantity > 0 for pos in tracker.snapshot().positions
+        has_any_position = _has_meaningful_position(
+            tracker.snapshot(), min_seed_position_notional
         )
         if not has_any_position:
+            if any(pos.quantity > 0 for pos in tracker.snapshot().positions):
+                logger.info(
+                    "Only dust positions detected (< $%.2f), seed trade still allowed",
+                    min_seed_position_notional,
+                )
             seed_symbol = "BTC/USDT"
             seed_price = await executor.get_ticker(seed_symbol)
             if seed_price and seed_price > 0:

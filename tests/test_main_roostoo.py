@@ -188,3 +188,18 @@ class TestMainRoostooMode:
         assert seed_order.symbol == "BTC/USDT"
         assert seed_order.side == Side.BUY
         assert seed_order.quantity == pytest.approx(2.0 / 50000.0)
+
+    @pytest.mark.asyncio
+    async def test_dust_position_does_not_block_seed_trade(
+        self, default_config, monkeypatch
+    ):
+        _install_roostoo_mode_fakes(monkeypatch)
+        _FakeRoostooExecutor.balances = {"USD": 250.0, "BTC": 0.00001}
+        _FakeRoostooExecutor.tickers = {"BTC/USDT": 50000.0}
+
+        await main_module.main(_build_roostoo_config(default_config))
+
+        order_manager = _FakeOrderManager.created
+        assert order_manager is not None
+        assert len(order_manager.submitted) == 1
+        assert order_manager.submitted[0].symbol == "BTC/USDT"
