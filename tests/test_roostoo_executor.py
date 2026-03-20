@@ -121,6 +121,47 @@ class TestRoostooExecutor:
         assert balances == {"USD": 0.0}
 
     @pytest.mark.asyncio
+    async def test_load_exchange_info_caches_pair_contract(self):
+        executor = RoostooExecutor({"api_key": "key", "api_secret": "secret"})
+        executor.get_exchange_info = AsyncMock(
+            return_value={
+                "TradePairs": {
+                    "BTC/USD": {"AmountPrecision": 4, "MiniOrder": "10"},
+                    "ETH/USD": {"AmountPrecision": 3, "MiniOrder": "5"},
+                }
+            }
+        )
+
+        await executor._load_exchange_info()
+
+        assert executor._pair_info["BTC/USDT"] == {
+            "min_qty": pytest.approx(0.0001),
+            "qty_precision": 4,
+            "min_notional": pytest.approx(10.0),
+        }
+        assert executor._pair_info["ETH/USDT"] == {
+            "min_qty": pytest.approx(0.001),
+            "qty_precision": 3,
+            "min_notional": pytest.approx(5.0),
+        }
+
+    @pytest.mark.asyncio
+    async def test_get_ticker_parses_last_price(self):
+        executor = RoostooExecutor({"api_key": "key", "api_secret": "secret"})
+        executor._signed_request = AsyncMock(
+            return_value={
+                "Success": True,
+                "Data": {
+                    "BTC/USD": {"LastPrice": "103245.12"},
+                },
+            }
+        )
+
+        price = await executor.get_ticker("BTC/USDT")
+
+        assert price == pytest.approx(103245.12)
+
+    @pytest.mark.asyncio
     async def test_get_status_maps_exchange_status(self):
         executor = RoostooExecutor({"api_key": "key", "api_secret": "secret"})
         executor._signed_request = AsyncMock(
