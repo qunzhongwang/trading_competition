@@ -106,3 +106,38 @@ class TestFactorEngine:
         assert regime_obs.bias == FactorBias.BEARISH
         assert snapshot.regime == "risk_off"
         assert snapshot.blocker_score > 0.0
+
+    def test_perp_crowding_uses_fixed_open_interest_lookback(self):
+        engine = FactorEngine(
+            {"strategy": {"open_interest_lookback_samples": 3}}
+        )
+        features = _feature_vector(funding_rate=0.0, taker_ratio=1.0)
+        supplementary = {
+            "order_book_imbalance": 1.0,
+            "funding_rate": 0.0,
+            "taker_ratio": 1.0,
+            "open_interest": 130.0,
+        }
+
+        short_snapshot = engine.evaluate(
+            features,
+            supplementary=supplementary,
+            supplementary_history={"open_interest": [100.0, 100.0, 130.0]},
+        )
+        long_snapshot = engine.evaluate(
+            features,
+            supplementary=supplementary,
+            supplementary_history={"open_interest": [60.0, 80.0, 100.0, 100.0, 130.0]},
+        )
+
+        short_perp = next(
+            obs for obs in short_snapshot.observations if obs.name == "perp_crowding"
+        )
+        long_perp = next(
+            obs for obs in long_snapshot.observations if obs.name == "perp_crowding"
+        )
+
+        assert short_perp.metadata["open_interest_change"] == long_perp.metadata[
+            "open_interest_change"
+        ]
+        assert short_snapshot.blocker_score == long_snapshot.blocker_score

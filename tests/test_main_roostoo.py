@@ -156,6 +156,8 @@ class TestMainRoostooMode:
         tracker = _RecordingTracker.created[-1]
         eth_position = tracker.get_position("ETH/USDT")
         assert tracker.snapshot().cash == pytest.approx(1250.0)
+        assert tracker.snapshot().nav == pytest.approx(9250.0)
+        assert tracker.snapshot().daily_pnl == pytest.approx(0.0)
         assert eth_position.quantity == pytest.approx(2.5)
         assert eth_position.entry_price == pytest.approx(3200.0)
         assert eth_position.state == StrategyState.HOLDING

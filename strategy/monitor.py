@@ -289,7 +289,13 @@ class StrategyMonitor:
                 ]
                 self._prev_prices[symbol] = candles[-1].close
 
-            supplementary_history_len = self._alpha_engine._seq_len
+            factor_history_window = getattr(
+                self._factor_engine, "supplementary_history_window", 2
+            )
+            supplementary_history_len = max(
+                self._alpha_engine._seq_len,
+                factor_history_window,
+            )
             if self._use_model_overlay and self._primary_minutes > 1:
                 supplementary_history_len *= self._primary_minutes
             supplementary_history = await self._buffer.get_supplementary_history(

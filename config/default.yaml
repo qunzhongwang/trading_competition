@@ -146,6 +146,7 @@ strategy:
   max_funding_rate: 0.0005
   max_taker_ratio: 1.20
   max_open_interest_change: 0.03
+  open_interest_lookback_samples: 60
   max_volatility: 0.025
   factor_weights:
     market_regime: 0.20
@@ -186,7 +187,7 @@ risk:
 execution:
   default_order_type: "market"
   limit_offset_bps: 5
-  order_timeout_seconds: 30
+  order_timeout_seconds: 180  # give maker-style limit orders time to rest
   fee_market_bps: 10        # 0.1% taker fee
   fee_limit_bps: 5          # 0.05% maker fee
 

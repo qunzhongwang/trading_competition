@@ -559,6 +559,9 @@ async def main(config: dict) -> None:
             else:
                 logger.warning("Could not get ticker for %s, skipping position recovery", symbol)
 
+        initial_capital = tracker.rebase_baselines()
+        logger.info("Roostoo startup NAV baseline: $%.2f", initial_capital)
+
         # 11c. Seed trade — buy $2 of BTC to ensure participation record
         has_any_position = _has_meaningful_position(
             tracker.snapshot(), min_seed_position_notional

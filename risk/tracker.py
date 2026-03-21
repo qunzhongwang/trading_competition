@@ -187,6 +187,23 @@ class PortfolioTracker:
         pos.state = StrategyState.HOLDING
         logger.info("Restored position: %s qty=%.6f @ %.2f", symbol, quantity, entry_price)
 
+    def rebase_baselines(self) -> float:
+        """Reset baseline NAV metrics to the current portfolio value.
+
+        Use this after rebuilding exchange state on startup so restored
+        positions do not appear as instant PnL.
+        """
+        nav = self._compute_nav()
+        now = datetime.utcnow()
+        self._initial_nav = nav
+        self._peak_nav = nav
+        self._daily_start_nav = nav
+        self._daily_peak_nav = nav
+        self._nav_history.clear()
+        self._nav_history.append((now, nav))
+        logger.info("Rebased tracker baselines to NAV=%.2f", nav)
+        return nav
+
     def _compute_nav(self) -> float:
         positions_value = sum(
             p.current_price * p.quantity

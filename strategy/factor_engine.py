@@ -42,6 +42,9 @@ class FactorEngine:
         self._max_open_interest_change: float = strategy_cfg.get(
             "max_open_interest_change", 0.03
         )
+        self._open_interest_lookback_samples: int = max(
+            2, int(strategy_cfg.get("open_interest_lookback_samples", 60))
+        )
         self._max_volatility: float = strategy_cfg.get("max_volatility", 0.025)
         self._regime_enabled: bool = regime_cfg.get("enabled", False)
         self._risk_on_threshold: float = regime_cfg.get("risk_on_threshold", 0.25)
@@ -129,6 +132,11 @@ class FactorEngine:
             blocking_factors=blocking_factors,
             summary=summary,
         )
+
+    @property
+    def supplementary_history_window(self) -> int:
+        """Minimum raw supplementary history required by the factor engine."""
+        return self._open_interest_lookback_samples
 
     def _market_regime(
         self, features: FeatureVector, market_context: Optional[dict]
@@ -380,9 +388,10 @@ class FactorEngine:
         open_interest = supplementary.get("open_interest", 0.0)
 
         oi_hist = supplementary_history.get("open_interest", [])
+        oi_window = oi_hist[-self._open_interest_lookback_samples :]
         oi_change = 0.0
-        if len(oi_hist) >= 2 and oi_hist[0] > 0:
-            oi_change = (oi_hist[-1] - oi_hist[0]) / oi_hist[0]
+        if len(oi_window) >= 2 and oi_window[0] > 0:
+            oi_change = (oi_window[-1] - oi_window[0]) / oi_window[0]
 
         crowded = max(
             0.0,

@@ -152,6 +152,22 @@ class TestResetDaily:
         assert snap.daily_drawdown < snap.drawdown
 
 
+class TestRebaseBaselines:
+    def test_rebase_clears_fake_startup_pnl_from_restored_positions(self):
+        tracker = PortfolioTracker(initial_capital=49_997.88, fee_bps=10.0)
+        tracker.restore_position("BTC/USDT", quantity=0.00003, entry_price=70_389.64)
+
+        pre_rebase = tracker.snapshot()
+        assert pre_rebase.daily_pnl > 2.0
+
+        tracker.rebase_baselines()
+
+        snap = tracker.snapshot()
+        assert snap.nav == pytest.approx(49_997.88 + 0.00003 * 70_389.64)
+        assert snap.daily_pnl == pytest.approx(0.0)
+        assert tracker.compute_risk_metrics().total_return_pct == pytest.approx(0.0)
+
+
 class TestInvalidFill:
     def test_fill_with_no_price(self, tracker):
         order = make_filled_buy(price=100.0, qty=1.0)
