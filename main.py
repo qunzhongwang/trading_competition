@@ -5,7 +5,7 @@ Usage:
     uv run python main.py --config config/live.yaml  # custom config
     uv run python main.py --mode live             # override mode
     uv run python main.py --mode roostoo          # Roostoo competition mode
-    uv run python main.py --mode roostoo --strategy-profile regime_trend_v1
+    uv run python main.py --mode roostoo --strategy-profile capital_preservation_v1
 """
 
 from __future__ import annotations
@@ -45,6 +45,83 @@ logger = logging.getLogger(__name__)
 
 
 STRATEGY_PROFILES: dict[str, dict] = {
+    "capital_preservation_v1": {
+        "alpha": {
+            "engine": "rule_based",
+            "resample_minutes": 5,
+            "multi_timeframes": [15, 60],
+        },
+        "strategy": {
+            "profile": "capital_preservation_v1",
+            "use_model_overlay": False,
+            "position_size_pct": 0.05,
+            "base_size_pct": 0.015,
+            "max_size_pct": 0.05,
+            "kelly_fraction": 0.25,
+            "estimated_win_rate": 0.53,
+            "estimated_payoff": 1.25,
+            "confirmation_bars": 3,
+            "min_entry_score": 0.72,
+            "max_blocker_score": 0.22,
+            "min_exit_score": 0.40,
+            "neutral_entry_size_multiplier": 0.25,
+            "risk_off_entry_size_multiplier": 0.00,
+            "min_volatility_size_multiplier": 0.20,
+            "require_trend_alignment": True,
+            "min_supporting_factors": 3,
+            "min_supporting_categories": 3,
+            "urgent_entry_score": 0.90,
+            "signal_horizon_minutes": 360,
+            "exit_horizon_minutes": 20,
+            "base_stop_loss_pct": 0.008,
+            "take_profit_1_rr": 0.8,
+            "take_profit_2_rr": 1.4,
+            "min_volume_ratio": 1.20,
+            "min_order_book_imbalance": 1.04,
+            "max_funding_rate": 0.0003,
+            "max_taker_ratio": 1.08,
+            "max_open_interest_change": 0.015,
+            "max_volatility": 0.018,
+            "factor_weights": {
+                "market_regime": 0.24,
+                "trend_alignment": 0.24,
+                "momentum_impulse": 0.14,
+                "breakout_confirmation": 0.10,
+                "volume_confirmation": 0.16,
+                "liquidity_balance": 0.08,
+                "perp_crowding": 0.18,
+                "volatility_regime": 0.12,
+            },
+        },
+        "regime": {
+            "enabled": True,
+            "benchmark_symbols": ["BTC/USDT", "ETH/USDT"],
+            "risk_on_threshold": 0.32,
+            "neutral_threshold": 0.12,
+            "breadth_min_symbols": 10,
+            "volatility_ceiling": 0.015,
+        },
+        "trend": {
+            "breakout_lookback": 24,
+            "trend_slope_lookback": 24,
+            "volume_zscore_window": 24,
+            "breakout_min_distance": 0.18,
+            "breakout_overheat_distance": 1.20,
+            "min_trend_slope": 0.0007,
+            "min_volume_zscore": 0.10,
+            "vol_target_floor": 0.010,
+        },
+        "risk": {
+            "max_portfolio_exposure": 0.18,
+            "max_single_exposure": 0.05,
+            "trailing_stop_pct": 0.018,
+            "atr_stop_multiplier": 1.6,
+            "daily_drawdown_limit": 0.025,
+            "max_orders_per_minute": 8,
+            "break_even_trigger_pct": 0.012,
+            "break_even_buffer_pct": 0.0015,
+        },
+    },
     "regime_trend_v1": {
         "alpha": {
             "engine": "rule_based",

@@ -535,7 +535,12 @@ class StrategyMonitor:
             return None
 
         feature_list = [state["features"] for state in symbol_state.values()]
-        breadth = self._market_breadth(feature_list)
+        positive_count = sum(
+            1
+            for feat in feature_list
+            if feat.momentum > 0 and feat.ema_fast >= feat.ema_slow
+        )
+        breadth = positive_count / len(feature_list)
         breadth_score = max(-1.0, min(1.0, 2.0 * breadth - 1.0))
         volume_expansion = sum(
             max(0.0, min(1.0, (feat.volume_ratio - 1.0) / 1.5))
@@ -557,7 +562,14 @@ class StrategyMonitor:
         )
         risk_on_threshold = regime_cfg.get("risk_on_threshold", 0.25)
         neutral_threshold = regime_cfg.get("neutral_threshold", 0.05)
-        if score >= risk_on_threshold:
+        breadth_min_symbols = max(0, int(regime_cfg.get("breadth_min_symbols", 0)))
+        breadth_ok = (
+            positive_count >= min(breadth_min_symbols, len(feature_list))
+            if breadth_min_symbols > 0
+            else True
+        )
+
+        if score >= risk_on_threshold and breadth_ok:
             regime = "risk_on"
         elif score >= neutral_threshold:
             regime = "neutral"
@@ -568,23 +580,14 @@ class StrategyMonitor:
             "regime": regime,
             "score": max(-1.0, min(1.0, score)),
             "breadth": breadth,
+            "positive_symbols": positive_count,
+            "breadth_ok": breadth_ok,
             "volume_expansion": volume_expansion,
             "avg_funding": sum(benchmark_funding) / max(len(benchmark_funding), 1),
             "avg_benchmark_volatility": avg_benchmark_vol,
             "vol_stress": vol_stress,
             "benchmarks": benchmark_scores,
         }
-
-    @staticmethod
-    def _market_breadth(features_list: list[Any]) -> float:
-        if not features_list:
-            return 0.5
-        positive = sum(
-            1
-            for feat in features_list
-            if feat.momentum > 0 and feat.ema_fast >= feat.ema_slow
-        )
-        return positive / len(features_list)
 
     @staticmethod
     def _benchmark_score(features: Any, candles_1h: Optional[list[OHLCV]]) -> float:

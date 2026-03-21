@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 import pytest
 
-from core.models import FactorSnapshot, OHLCV
+from core.models import FactorSnapshot, FeatureVector, OHLCV
 from data.buffer import LiveBuffer
 from features.extractor import FeatureExtractor
 from data.resampler import MultiResampler
@@ -24,6 +24,32 @@ def _candle(symbol: str, minute_offset: int, close: float = 100.0) -> OHLCV:
         volume=10.0,
         timestamp=datetime(2025, 1, 1, 0, 0) + timedelta(minutes=minute_offset),
         is_closed=True,
+    )
+
+
+def _feature(
+    symbol: str,
+    *,
+    momentum: float,
+    ema_fast: float,
+    ema_slow: float = 100.0,
+    volume_ratio: float = 1.3,
+    volatility: float = 0.01,
+) -> FeatureVector:
+    return FeatureVector(
+        symbol=symbol,
+        timestamp=datetime(2025, 1, 1, 0, 0),
+        rsi=55.0,
+        ema_fast=ema_fast,
+        ema_slow=ema_slow,
+        atr=1.0,
+        momentum=momentum,
+        volatility=volatility,
+        order_book_imbalance=1.05,
+        volume_ratio=volume_ratio,
+        funding_rate=0.0001,
+        taker_ratio=1.0,
+        raw={},
     )
 
 
@@ -239,3 +265,78 @@ class TestMonitorStatusFormatting:
             {"regime": "risk_off", "score": -0.214, "breadth": 0.23}
         )
         assert status == "Regime=risk_off(score=-0.214, breadth=0.23)"
+
+
+class TestMarketContext:
+    def test_breadth_floor_caps_risk_on_regime(self, default_config):
+        class _OrderManagerStub:
+            def register_fill_callback(self, cb):
+                self._callback = cb
+
+        class _AlphaStub:
+            _seq_len = 1
+
+        config = {
+            **default_config,
+            "symbols": [
+                "BTC/USDT",
+                "ETH/USDT",
+                "SOL/USDT",
+                "LINK/USDT",
+                "DOGE/USDT",
+            ],
+            "regime": {
+                "enabled": True,
+                "benchmark_symbols": ["BTC/USDT", "ETH/USDT"],
+                "risk_on_threshold": 0.10,
+                "neutral_threshold": 0.0,
+                "breadth_min_symbols": 4,
+                "volatility_ceiling": 0.02,
+            },
+        }
+
+        monitor = StrategyMonitor(
+            config=config,
+            buffer=LiveBuffer(max_candles=10),
+            extractor=FeatureExtractor(config["features"]),
+            alpha_engine=_AlphaStub(),
+            risk_shield=RiskShield(config),
+            tracker=PortfolioTracker(100_000.0),
+            order_manager=_OrderManagerStub(),
+        )
+
+        symbol_state = {
+            "BTC/USDT": {
+                "features": _feature("BTC/USDT", momentum=0.02, ema_fast=101.0),
+                "supplementary": {},
+                "candles_1h": None,
+            },
+            "ETH/USDT": {
+                "features": _feature("ETH/USDT", momentum=0.018, ema_fast=100.9),
+                "supplementary": {},
+                "candles_1h": None,
+            },
+            "SOL/USDT": {
+                "features": _feature("SOL/USDT", momentum=0.01, ema_fast=100.4),
+                "supplementary": {},
+                "candles_1h": None,
+            },
+            "LINK/USDT": {
+                "features": _feature("LINK/USDT", momentum=-0.01, ema_fast=99.7),
+                "supplementary": {},
+                "candles_1h": None,
+            },
+            "DOGE/USDT": {
+                "features": _feature("DOGE/USDT", momentum=-0.008, ema_fast=99.6),
+                "supplementary": {},
+                "candles_1h": None,
+            },
+        }
+
+        context = monitor._build_market_context(symbol_state)
+        assert context is not None
+        assert context["score"] > 0.10
+        assert context["breadth"] == pytest.approx(0.6)
+        assert context["positive_symbols"] == 3
+        assert context["breadth_ok"] is False
+        assert context["regime"] == "neutral"

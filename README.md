@@ -12,7 +12,7 @@ For a Chinese architecture map with diagrams and module I/O contracts, see [`ARC
 
 ## Quick Start
 
-Default Roostoo runtime is pinned to the explicit `regime_trend_v1` profile.
+Default Roostoo runtime is pinned to the explicit `capital_preservation_v1` profile.
 
 ```bash
 cd /Users/kevinwu/Coding/trading_competition
@@ -77,7 +77,7 @@ Binance WS / SimFeed
     - exposure limits
     - cash checks
     - daily drawdown breaker
-    - ATR / trailing stops
+    - ATR / trailing / profit-lock stops
         |
         v
    OrderManager
@@ -203,15 +203,15 @@ It may only:
 
 ## Strategy Profile
 
-The default runtime now uses the explicit `regime_trend_v1` profile.
+The default runtime now uses the explicit `capital_preservation_v1` profile.
 
 - it keeps the system factor-first
-- it computes one market regime context per iteration from benchmark trend plus market breadth
-- it blocks new longs in `risk_off`
-- it scales new entries down in `neutral`
-- it reduces position size further when realized volatility is elevated
+- it upgrades the market-regime filter to require both strong benchmarks and broad participation before `risk_on`
+- it blocks new longs in `risk_off` and cuts `neutral` entries to quarter-size
+- it requires broader multi-factor confirmation before new longs are allowed
+- it uses tighter exposure, drawdown, and profit-lock risk rules for weaker crypto tape
 
-For Roostoo mode, [`scripts/start_competition.sh`](scripts/start_competition.sh) launches with `--strategy-profile regime_trend_v1` so the runtime is pinned to that profile instead of relying on ad hoc flag combinations.
+For Roostoo mode, [`scripts/start_competition.sh`](scripts/start_competition.sh) launches with `--strategy-profile capital_preservation_v1` so the runtime is pinned to that profile instead of relying on ad hoc flag combinations.
 
 Important:
 

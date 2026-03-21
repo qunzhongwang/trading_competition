@@ -65,12 +65,27 @@ class TestLoadConfig:
         assert "trailing_stop_pct" in risk
         assert "daily_drawdown_limit" in risk
 
-    def test_default_config_selects_regime_trend_profile(self):
+    def test_default_config_selects_capital_preservation_profile(self):
         config = load_config("config/default.yaml")
-        assert config["strategy"]["profile"] == "regime_trend_v1"
+        assert config["strategy"]["profile"] == "capital_preservation_v1"
 
 
 class TestStrategyProfiles:
+    def test_apply_capital_preservation_profile_overrides_runtime_knobs(self):
+        config = {
+            "alpha": {"engine": "ensemble", "resample_minutes": 1},
+            "strategy": {"use_model_overlay": True},
+        }
+
+        _apply_strategy_profile(config, "capital_preservation_v1")
+
+        assert config["strategy"]["profile"] == "capital_preservation_v1"
+        assert config["alpha"]["engine"] == "rule_based"
+        assert config["alpha"]["resample_minutes"] == 5
+        assert config["strategy"]["use_model_overlay"] is False
+        assert config["strategy"]["confirmation_bars"] == 3
+        assert config["risk"]["daily_drawdown_limit"] == pytest.approx(0.025)
+
     def test_apply_regime_trend_profile_overrides_runtime_knobs(self):
         config = {
             "alpha": {"engine": "ensemble", "resample_minutes": 1},

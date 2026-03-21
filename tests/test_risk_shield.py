@@ -165,6 +165,47 @@ class TestTrailingStop:
         assert len(orders) == 0
 
 
+class TestBreakEvenLock:
+    def test_triggers_after_profitable_retrace(self, default_config, tracker):
+        config = {
+            **default_config,
+            "risk": {
+                **default_config["risk"],
+                "break_even_trigger_pct": 0.01,
+                "break_even_buffer_pct": 0.002,
+            },
+        }
+        shield = RiskShield(config)
+        tracker.on_fill(make_filled_buy(price=100.0, qty=1.0))
+        pos = tracker.get_position("BTC/USDT")
+        pos.peak_price = 102.0
+        pos.state = StrategyState.HOLDING
+
+        candle = make_candle(close=100.10)
+        orders = shield.check_stops(tracker, {"BTC/USDT": candle}, {})
+        assert len(orders) == 1
+        assert orders[0].side == Side.SELL
+
+    def test_does_not_trigger_before_profit_threshold(self, default_config, tracker):
+        config = {
+            **default_config,
+            "risk": {
+                **default_config["risk"],
+                "break_even_trigger_pct": 0.01,
+                "break_even_buffer_pct": 0.002,
+            },
+        }
+        shield = RiskShield(config)
+        tracker.on_fill(make_filled_buy(price=100.0, qty=1.0))
+        pos = tracker.get_position("BTC/USDT")
+        pos.peak_price = 100.8
+        pos.state = StrategyState.HOLDING
+
+        candle = make_candle(close=100.10)
+        orders = shield.check_stops(tracker, {"BTC/USDT": candle}, {})
+        assert len(orders) == 0
+
+
 class TestATRStop:
     def test_triggers_below_atr_stop(self, shield, tracker):
         tracker.on_fill(make_filled_buy(price=100.0, qty=1.0))

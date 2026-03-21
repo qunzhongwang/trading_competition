@@ -29,6 +29,12 @@ class RiskShield:
         self._atr_stop_multiplier: float = risk_cfg.get("atr_stop_multiplier", 2.0)
         self._daily_drawdown_limit: float = risk_cfg.get("daily_drawdown_limit", 0.05)
         self._max_orders_per_minute: int = risk_cfg.get("max_orders_per_minute", 10)
+        self._break_even_trigger_pct: float = max(
+            0.0, risk_cfg.get("break_even_trigger_pct", 0.0)
+        )
+        self._break_even_buffer_pct: float = max(
+            0.0, risk_cfg.get("break_even_buffer_pct", 0.0)
+        )
 
         self._order_timestamps: deque = deque(maxlen=100)
         self._circuit_breaker_active: bool = False
@@ -183,9 +189,31 @@ class RiskShield:
             # Trailing stop
             if pos.peak_price > 0:
                 stop_price = pos.peak_price * (1 - self._trailing_stop_pct)
+                reason = (
+                    f"trailing stop (peak={pos.peak_price:.2f}, stop={stop_price:.2f})"
+                )
+
+                # If a trade already moved far enough in our favor, tighten the
+                # floor so a winner is less likely to round-trip into a loser.
+                if (
+                    self._break_even_trigger_pct > 0
+                    and pos.entry_price > 0
+                    and pos.peak_price
+                    >= pos.entry_price * (1 + self._break_even_trigger_pct)
+                ):
+                    break_even_price = pos.entry_price * (
+                        1 + self._break_even_buffer_pct
+                    )
+                    if break_even_price > stop_price:
+                        stop_price = break_even_price
+                        reason = (
+                            "break-even lock "
+                            f"(entry={pos.entry_price:.2f}, peak={pos.peak_price:.2f}, "
+                            f"floor={stop_price:.2f})"
+                        )
+
                 if current_price <= stop_price:
                     triggered = True
-                    reason = f"trailing stop (peak={pos.peak_price:.2f}, stop={stop_price:.2f})"
 
             # ATR stop
             if not triggered and symbol in atr_values:

@@ -108,81 +108,83 @@ alpha:
   icir_tau: 50.0            # decay rate for lambda
 
 strategy:
-  profile: "regime_trend_v1"
+  profile: "capital_preservation_v1"
   max_positions_per_symbol: 1
   use_model_overlay: false  # when true, alpha engine is only a filter/size overlay
-  position_size_pct: 0.10   # fallback if Kelly is disabled
-  base_size_pct: 0.05       # Half-Kelly floor
-  max_size_pct: 0.15        # Half-Kelly ceiling
-  kelly_fraction: 0.5       # half-Kelly multiplier
-  estimated_win_rate: 0.55  # prior — calibrate from backtest results
-  estimated_payoff: 1.5     # avg_win / avg_loss — calibrate from backtest results
-  urgent_alpha_threshold: 0.85  # alpha above this → market order
-  confirmation_bars: 2      # require N consecutive bars above threshold
+  position_size_pct: 0.05   # fallback if Kelly is disabled
+  base_size_pct: 0.015      # Half-Kelly floor
+  max_size_pct: 0.05        # Half-Kelly ceiling
+  kelly_fraction: 0.25      # quarter-Kelly multiplier
+  estimated_win_rate: 0.53  # prior — calibrate from backtest results
+  estimated_payoff: 1.25    # avg_win / avg_loss — calibrate from backtest results
+  urgent_alpha_threshold: 0.90  # alpha above this → market order
+  confirmation_bars: 3      # require N consecutive bars above threshold
   adaptive_kelly: false     # enable adaptive Kelly sizing from trade history
   kelly_window: 50          # rolling window for adaptive Kelly
   kelly_min_trades: 10      # min trades before blending with priors
   exit_tiers: []            # graduated exits, e.g. [{threshold: -0.1, sell_pct: 0.5}, {threshold: -0.3, sell_pct: 1.0}]
-  min_entry_score: 0.62
-  max_blocker_score: 0.35
-  min_exit_score: 0.55
-  min_supporting_factors: 2
-  min_supporting_categories: 2
+  min_entry_score: 0.72
+  max_blocker_score: 0.22
+  min_exit_score: 0.40
+  min_supporting_factors: 3
+  min_supporting_categories: 3
   require_trend_alignment: true
-  urgent_entry_score: 0.82
-  signal_horizon_minutes: 240
-  exit_horizon_minutes: 30
-  base_stop_loss_pct: 0.012
-  take_profit_1_rr: 1.2
-  take_profit_2_rr: 2.0
+  urgent_entry_score: 0.90
+  signal_horizon_minutes: 360
+  exit_horizon_minutes: 20
+  base_stop_loss_pct: 0.008
+  take_profit_1_rr: 0.8
+  take_profit_2_rr: 1.4
   model_filter_threshold: 0.05
   model_exit_threshold: -0.10
   model_size_weight: 0.15
-  neutral_entry_size_multiplier: 0.50
+  neutral_entry_size_multiplier: 0.25
   risk_off_entry_size_multiplier: 0.00
-  min_volatility_size_multiplier: 0.35
-  min_volume_ratio: 1.10
-  min_order_book_imbalance: 1.02
-  max_funding_rate: 0.0005
-  max_taker_ratio: 1.20
-  max_open_interest_change: 0.03
+  min_volatility_size_multiplier: 0.20
+  min_volume_ratio: 1.20
+  min_order_book_imbalance: 1.04
+  max_funding_rate: 0.0003
+  max_taker_ratio: 1.08
+  max_open_interest_change: 0.015
   open_interest_lookback_samples: 60
-  max_volatility: 0.025
+  max_volatility: 0.018
   factor_weights:
-    market_regime: 0.20
+    market_regime: 0.24
     trend_alignment: 0.24
-    momentum_impulse: 0.18
-    breakout_confirmation: 0.12
-    volume_confirmation: 0.14
+    momentum_impulse: 0.14
+    breakout_confirmation: 0.10
+    volume_confirmation: 0.16
     liquidity_balance: 0.08
-    perp_crowding: 0.14
-    volatility_regime: 0.10
+    perp_crowding: 0.18
+    volatility_regime: 0.12
 
 regime:
   enabled: true
   benchmark_symbols: ["BTC/USDT", "ETH/USDT"]
-  risk_on_threshold: 0.25
-  neutral_threshold: 0.05
-  breadth_min_symbols: 5
-  volatility_ceiling: 0.020
+  risk_on_threshold: 0.32
+  neutral_threshold: 0.12
+  breadth_min_symbols: 10
+  volatility_ceiling: 0.015
 
 trend:
-  breakout_lookback: 20
-  trend_slope_lookback: 20
+  breakout_lookback: 24
+  trend_slope_lookback: 24
   volume_zscore_window: 24
-  breakout_min_distance: 0.10
-  breakout_overheat_distance: 1.75
-  min_trend_slope: 0.0005
-  min_volume_zscore: -0.25
-  vol_target_floor: 0.012
+  breakout_min_distance: 0.18
+  breakout_overheat_distance: 1.20
+  min_trend_slope: 0.0007
+  min_volume_zscore: 0.10
+  vol_target_floor: 0.010
 
 risk:
-  max_portfolio_exposure: 0.45
-  max_single_exposure: 0.12
-  trailing_stop_pct: 0.03
-  atr_stop_multiplier: 2.0
-  daily_drawdown_limit: 0.05
-  max_orders_per_minute: 20  # per-symbol rate limit (Binance allows 10/s but be conservative)
+  max_portfolio_exposure: 0.18
+  max_single_exposure: 0.05
+  trailing_stop_pct: 0.018
+  atr_stop_multiplier: 1.6
+  daily_drawdown_limit: 0.025
+  max_orders_per_minute: 8   # per-symbol rate limit
+  break_even_trigger_pct: 0.012
+  break_even_buffer_pct: 0.0015
 
 execution:
   default_order_type: "market"

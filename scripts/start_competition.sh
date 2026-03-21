@@ -29,7 +29,7 @@ fi
 
 # Use venv python explicitly to avoid system python confusion
 PYTHON="$PROJECT_DIR/.venv/bin/python3"
-STRATEGY_PROFILE="${STRATEGY_PROFILE:-regime_trend_v1}"
+STRATEGY_PROFILE="${STRATEGY_PROFILE:-capital_preservation_v1}"
 
 # Validate required env vars (either COMP or regular keys)
 if [ -z "${ROOSTOO_COMP_API_KEY:-}${ROOSTOO_API_KEY:-}" ] || [ -z "${ROOSTOO_COMP_API_SECRET:-}${ROOSTOO_API_SECRET:-}" ]; then
