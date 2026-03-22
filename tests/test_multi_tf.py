@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 import pytest
 
-from core.models import FactorSnapshot, FeatureVector, OHLCV
+from core.models import FactorSnapshot, FeatureVector, OHLCV, Order, OrderType, Side, StrategyState
 from data.buffer import LiveBuffer
 from features.extractor import FeatureExtractor
 from data.resampler import MultiResampler
@@ -340,3 +340,138 @@ class TestMarketContext:
         assert context["positive_symbols"] == 3
         assert context["breadth_ok"] is False
         assert context["regime"] == "neutral"
+
+
+class TestMonitorCandidateSelection:
+    class _OrderManagerStub:
+        def register_fill_callback(self, cb):
+            self._callback = cb
+
+    class _AlphaStub:
+        _seq_len = 1
+
+    class _StrategyStub:
+        def __init__(self):
+            self.cancelled_orders = []
+
+        def build_instruction(self, intent, current_price):
+            class _Instruction:
+                def __init__(self, symbol):
+                    self._symbol = symbol
+
+                def to_order(self):
+                    return Order(
+                        symbol=self._symbol,
+                        side=Side.BUY,
+                        order_type=OrderType.MARKET,
+                        quantity=1.0,
+                    )
+
+            return _Instruction(intent["symbol"])
+
+        def on_cancel(self, order):
+            self.cancelled_orders.append(order)
+
+    def _build_monitor(self, default_config, strategy_overrides=None):
+        config = {
+            **default_config,
+            "symbols": ["BTC/USDT", "ETH/USDT", "LINK/USDT"],
+            "strategy": {
+                **default_config["strategy"],
+                "min_entry_score": 0.74,
+                "core_symbols": ["BTC/USDT", "ETH/USDT"],
+                "satellite_symbols": ["LINK/USDT"],
+                "allow_satellite_in_neutral": False,
+                "satellite_max_active_positions": 1,
+                "satellite_min_entry_score_bonus": 0.04,
+                "core_priority_bonus": 0.03,
+                **(strategy_overrides or {}),
+            },
+        }
+        return StrategyMonitor(
+            config=config,
+            buffer=LiveBuffer(max_candles=10),
+            extractor=FeatureExtractor(config["features"]),
+            alpha_engine=self._AlphaStub(),
+            risk_shield=RiskShield(config),
+            tracker=PortfolioTracker(100_000.0),
+            order_manager=self._OrderManagerStub(),
+        )
+
+    def _candidate(self, symbol: str, regime: str, entry: float = 0.78):
+        return {
+            "symbol": symbol,
+            "factor_snapshot": FactorSnapshot(
+                symbol=symbol,
+                timestamp=datetime(2025, 1, 1),
+                regime=regime,
+                entry_score=entry,
+                exit_score=0.0,
+                blocker_score=0.02,
+                confidence=0.8,
+                observations=[],
+                supporting_factors=[],
+                blocking_factors=[],
+                summary="test",
+            ),
+        }
+
+    def test_core_symbol_gets_priority_bonus_in_ranking(self, default_config):
+        monitor = self._build_monitor(default_config)
+        ranked = monitor._rank_buy_candidates(
+            [
+                self._candidate("LINK/USDT", "risk_on"),
+                self._candidate("BTC/USDT", "risk_on"),
+            ]
+        )
+        assert [candidate["symbol"] for candidate in ranked] == [
+            "BTC/USDT",
+            "LINK/USDT",
+        ]
+
+    def test_neutral_regime_blocks_satellite_candidate(self, default_config):
+        monitor = self._build_monitor(default_config)
+        strategy = self._StrategyStub()
+        ranked = monitor._rank_buy_candidates(
+            [
+                {
+                    **self._candidate("LINK/USDT", "neutral"),
+                    "strategy": strategy,
+                    "intent": {"symbol": "LINK/USDT"},
+                    "current_price": 100.0,
+                }
+            ]
+        )
+        assert ranked == []
+        assert len(strategy.cancelled_orders) == 1
+
+    def test_satellite_requires_higher_entry_score_than_core(self, default_config):
+        monitor = self._build_monitor(default_config)
+        strategy = self._StrategyStub()
+        ranked = monitor._rank_buy_candidates(
+            [
+                {
+                    **self._candidate("LINK/USDT", "risk_on", entry=0.76),
+                    "strategy": strategy,
+                    "intent": {"symbol": "LINK/USDT"},
+                    "current_price": 100.0,
+                }
+            ]
+        )
+        assert ranked == []
+        assert len(strategy.cancelled_orders) == 1
+
+    def test_active_satellite_count_ignores_excluded_symbols(self, default_config):
+        monitor = self._build_monitor(default_config)
+        monitor.strategies["LINK/USDT"]._state = StrategyState.HOLDING
+
+        assert monitor._active_satellite_count() == 1
+        assert monitor._active_satellite_count(exclude_symbols={"LINK/USDT"}) == 0
+
+    def test_active_symbol_count_can_ignore_unsubmitted_candidates(self, default_config):
+        monitor = self._build_monitor(default_config)
+        monitor.strategies["BTC/USDT"]._state = StrategyState.LONG_PENDING
+        monitor.strategies["ETH/USDT"]._state = StrategyState.HOLDING
+
+        assert monitor._active_symbol_count() == 2
+        assert monitor._active_symbol_count(exclude_symbols={"BTC/USDT"}) == 1

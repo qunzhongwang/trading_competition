@@ -615,6 +615,10 @@ class FactorEngine:
         supplementary: dict,
         supplementary_history: dict,
     ) -> FactorObservation:
+        has_funding = supplementary.get("has_funding_rate", False)
+        has_taker_ratio = supplementary.get("has_taker_ratio", False)
+        has_open_interest = supplementary.get("has_open_interest", False)
+
         funding = supplementary.get("funding_rate", features.funding_rate)
         taker_ratio = supplementary.get("taker_ratio", features.taker_ratio)
         open_interest = supplementary.get("open_interest", 0.0)
@@ -622,22 +626,37 @@ class FactorEngine:
         oi_hist = supplementary_history.get("open_interest", [])
         oi_window = oi_hist[-self._open_interest_lookback_samples :]
         oi_change = 0.0
-        if len(oi_window) >= 2 and oi_window[0] > 0:
+        if has_open_interest and len(oi_window) >= 2 and oi_window[0] > 0:
             oi_change = (oi_window[-1] - oi_window[0]) / oi_window[0]
 
-        crowded = max(
-            0.0,
-            max(funding - self._max_funding_rate, 0.0) / max(self._max_funding_rate, 1e-6),
-            max(taker_ratio - self._max_taker_ratio, 0.0) / max(self._max_taker_ratio, 1e-6),
-            max(oi_change - self._max_open_interest_change, 0.0)
-            / max(self._max_open_interest_change, 1e-6),
-        )
+        crowded_components = [0.0]
+        if has_funding:
+            crowded_components.append(
+                max(funding - self._max_funding_rate, 0.0)
+                / max(self._max_funding_rate, 1e-6)
+            )
+        if has_taker_ratio:
+            crowded_components.append(
+                max(taker_ratio - self._max_taker_ratio, 0.0)
+                / max(self._max_taker_ratio, 1e-6)
+            )
+        if has_open_interest:
+            crowded_components.append(
+                max(oi_change - self._max_open_interest_change, 0.0)
+                / max(self._max_open_interest_change, 1e-6)
+            )
+        crowded = max(crowded_components)
         strength = _clamp(crowded)
 
         bias = FactorBias.NEUTRAL
         if strength > 0:
             bias = FactorBias.BEARISH
-        elif 0.0 < funding < self._max_funding_rate * 0.5 and taker_ratio <= 1.05:
+        elif (
+            has_funding
+            and has_taker_ratio
+            and 0.0 < funding < self._max_funding_rate * 0.5
+            and taker_ratio <= 1.05
+        ):
             bias = FactorBias.BULLISH
             strength = 0.15
 
@@ -661,6 +680,9 @@ class FactorEngine:
                 "taker_ratio": taker_ratio,
                 "open_interest": open_interest,
                 "open_interest_change": oi_change,
+                "has_funding_rate": has_funding,
+                "has_taker_ratio": has_taker_ratio,
+                "has_open_interest": has_open_interest,
             },
         )
 

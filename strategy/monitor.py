@@ -5,7 +5,7 @@ import time
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, Optional, Set
 
-from core.models import OHLCV, Order, OrderStatus, StrategyState
+from core.models import OHLCV, Order, OrderStatus, Side, StrategyState
 from data.buffer import LiveBuffer
 from data.resampler import CandleResampler, MultiResampler
 from execution.order_manager import OrderManager
@@ -68,6 +68,38 @@ class StrategyMonitor:
         self._multi_timeframes = alpha_cfg.get("multi_timeframes", [])
         self._use_model_overlay = config.get("strategy", {}).get(
             "use_model_overlay", False
+        )
+        strategy_cfg = config.get("strategy", {})
+        default_slot_count = max(len(config.get("symbols", [])), 1)
+        self._core_symbols: Set[str] = set(strategy_cfg.get("core_symbols", []))
+        self._satellite_symbols: Set[str] = set(
+            strategy_cfg.get("satellite_symbols", [])
+        )
+        self._allow_satellite_in_neutral: bool = strategy_cfg.get(
+            "allow_satellite_in_neutral", True
+        )
+        self._min_entry_score: float = float(
+            strategy_cfg.get("min_entry_score", 0.0)
+        )
+        self._top_n_entries_per_cycle: int = max(
+            1, int(strategy_cfg.get("top_n_entries_per_cycle", default_slot_count))
+        )
+        self._max_active_positions: int = max(
+            1, int(strategy_cfg.get("max_active_positions", default_slot_count))
+        )
+        self._satellite_max_active_positions: int = max(
+            0,
+            int(
+                strategy_cfg.get(
+                    "satellite_max_active_positions", len(self._satellite_symbols)
+                )
+            ),
+        )
+        self._satellite_min_entry_score_bonus: float = float(
+            strategy_cfg.get("satellite_min_entry_score_bonus", 0.0)
+        )
+        self._core_priority_bonus: float = float(
+            strategy_cfg.get("core_priority_bonus", 0.0)
         )
         self._primary_minutes = 1
         if multi_resampler is not None:
@@ -247,6 +279,7 @@ class StrategyMonitor:
 
         market_context = self._build_market_context(symbol_state)
         self._latest_market_context = market_context
+        buy_candidates: list[dict[str, Any]] = []
 
         for symbol, strategy in self._strategies.items():
             state = symbol_state.get(symbol)
@@ -366,6 +399,18 @@ class StrategyMonitor:
                         intent.model_dump(mode="json")
                     )
 
+                if intent.direction == Side.BUY:
+                    buy_candidates.append(
+                        {
+                            "symbol": symbol,
+                            "strategy": strategy,
+                            "intent": intent,
+                            "current_price": candles[-1].close,
+                            "factor_snapshot": factor_snapshot,
+                        }
+                    )
+                    continue
+
                 instruction = strategy.build_instruction(
                     intent, current_price=candles[-1].close
                 )
@@ -388,6 +433,63 @@ class StrategyMonitor:
                     strategy.on_cancel(order)
 
         # ── Post-trade Risk Checks ──
+        ranked_buy_candidates = self._rank_buy_candidates(buy_candidates)
+        selected_buy_candidates = ranked_buy_candidates[: self._top_n_entries_per_cycle]
+        skipped_buy_candidates = ranked_buy_candidates[self._top_n_entries_per_cycle :]
+        for candidate in skipped_buy_candidates:
+            self._cancel_buy_candidate(
+                candidate,
+                "not in top entry cohort for this cycle",
+            )
+
+        for idx, candidate in enumerate(selected_buy_candidates):
+            unsubmitted_symbols = {
+                item["symbol"] for item in selected_buy_candidates[idx:]
+            }
+            if (
+                self._active_symbol_count(exclude_symbols=unsubmitted_symbols)
+                >= self._max_active_positions
+            ):
+                self._cancel_buy_candidate(
+                    candidate,
+                    "max active position cap reached",
+                )
+                continue
+
+            if (
+                candidate["symbol"] in self._satellite_symbols
+                and self._active_satellite_count(exclude_symbols=unsubmitted_symbols)
+                >= self._satellite_max_active_positions
+            ):
+                self._cancel_buy_candidate(
+                    candidate,
+                    "satellite position cap reached",
+                )
+                continue
+
+            strategy = candidate["strategy"]
+            intent = candidate["intent"]
+            current_price = candidate["current_price"]
+            instruction = strategy.build_instruction(
+                intent,
+                current_price=current_price,
+            )
+            if self._trade_logger is not None:
+                await self._trade_logger.log_trade_instruction(
+                    instruction.model_dump(mode="json")
+                )
+
+            order = instruction.to_order()
+            validated = self._risk_shield.validate(
+                order,
+                self._tracker,
+                market_price=current_price,
+            )
+            if validated is not None:
+                await self._order_manager.submit(validated)
+            else:
+                strategy.on_cancel(order)
+
         # Trailing stops and ATR stops
         stop_orders = self._risk_shield.check_stops(
             self._tracker, latest_candles, atr_values
@@ -473,6 +575,106 @@ class StrategyMonitor:
             sampled.reverse()
             aligned[key] = sampled
         return aligned
+
+    def _rank_buy_candidates(
+        self, candidates: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        ranked: list[dict[str, Any]] = []
+        for candidate in candidates:
+            reason = self._buy_candidate_rejection_reason(candidate)
+            if reason is not None:
+                self._cancel_buy_candidate(candidate, reason)
+                continue
+            ranked.append(candidate)
+        ranked.sort(key=self._candidate_priority_score, reverse=True)
+        return ranked
+
+    def _buy_candidate_rejection_reason(
+        self, candidate: dict[str, Any]
+    ) -> Optional[str]:
+        symbol = candidate["symbol"]
+        snapshot = candidate["factor_snapshot"]
+        regime = snapshot.regime
+        if regime == "risk_off":
+            return "market regime is risk_off"
+        if symbol in self._satellite_symbols and regime == "neutral":
+            if not self._allow_satellite_in_neutral:
+                return "satellite entries disabled outside risk_on"
+        if (
+            symbol in self._satellite_symbols
+            and snapshot.entry_score
+            < (self._min_entry_score + self._satellite_min_entry_score_bonus)
+        ):
+            return "satellite entry score below stricter threshold"
+        return None
+
+    def _candidate_priority_score(self, candidate: dict[str, Any]) -> float:
+        snapshot = candidate["factor_snapshot"]
+        symbol = candidate["symbol"]
+        score = snapshot.entry_score - 0.5 * snapshot.blocker_score
+        if symbol in self._core_symbols:
+            score += self._core_priority_bonus
+        return score
+
+    def _cancel_buy_candidate(self, candidate: dict[str, Any], reason: str) -> None:
+        symbol = candidate["symbol"]
+        strategy = candidate["strategy"]
+        current_price = candidate["current_price"]
+        intent = candidate["intent"]
+        logger.info("[%s] skipped buy candidate: %s", symbol, reason)
+        order = strategy.build_instruction(
+            intent,
+            current_price=current_price,
+        ).to_order()
+        strategy.on_cancel(order)
+
+    def _active_symbol_count(self, exclude_symbols: Optional[Set[str]] = None) -> int:
+        excluded = exclude_symbols or set()
+        active_symbols = {
+            pos.symbol
+            for pos in self._tracker.snapshot().positions
+            if pos.quantity > 0 and pos.symbol not in excluded
+        }
+        active_states = {
+            StrategyState.LONG_PENDING,
+            StrategyState.HOLDING,
+            StrategyState.EXIT_PENDING,
+        }
+        active_symbols.update(
+            symbol
+            for symbol, strategy in self._strategies.items()
+            if symbol not in excluded and strategy._state in active_states
+        )
+        return len(active_symbols)
+
+    def _active_satellite_count(
+        self, exclude_symbols: Optional[Set[str]] = None
+    ) -> int:
+        excluded = exclude_symbols or set()
+        return len(
+            self._satellite_symbols.intersection(
+                {
+                    pos.symbol
+                    for pos in self._tracker.snapshot().positions
+                    if pos.quantity > 0 and pos.symbol not in excluded
+                }
+            ).union(
+                {
+                    symbol
+                    for symbol, strategy in self._strategies.items()
+                    if (
+                        symbol in self._satellite_symbols
+                        and symbol not in excluded
+                        and strategy._state
+                        in {
+                            StrategyState.LONG_PENDING,
+                            StrategyState.HOLDING,
+                            StrategyState.EXIT_PENDING,
+                        }
+                    )
+                }
+            )
+        )
 
     async def _liquidate_all(self) -> None:
         """Emergency liquidation: sell all positions."""

@@ -65,9 +65,9 @@ class TestLoadConfig:
         assert "trailing_stop_pct" in risk
         assert "daily_drawdown_limit" in risk
 
-    def test_default_config_selects_capital_preservation_profile(self):
+    def test_default_config_selects_core_satellite_rotation_profile(self):
         config = load_config("config/default.yaml")
-        assert config["strategy"]["profile"] == "capital_preservation_v1"
+        assert config["strategy"]["profile"] == "core_satellite_rotation_v1"
 
 
 class TestStrategyProfiles:
@@ -85,6 +85,41 @@ class TestStrategyProfiles:
         assert config["strategy"]["use_model_overlay"] is False
         assert config["strategy"]["confirmation_bars"] == 3
         assert config["risk"]["daily_drawdown_limit"] == pytest.approx(0.025)
+
+    def test_apply_core_satellite_rotation_profile_sets_whitelist_and_caps(self):
+        config = {
+            "alpha": {"engine": "ensemble", "resample_minutes": 1},
+            "strategy": {"use_model_overlay": True},
+            "symbols": ["DOGE/USDT"],
+        }
+
+        _apply_strategy_profile(config, "core_satellite_rotation_v1")
+
+        assert config["strategy"]["profile"] == "core_satellite_rotation_v1"
+        assert config["alpha"]["engine"] == "rule_based"
+        assert config["symbols"] == [
+            "BTC/USDT",
+            "ETH/USDT",
+            "SOL/USDT",
+            "BNB/USDT",
+            "LINK/USDT",
+            "XRP/USDT",
+        ]
+        assert config["strategy"]["max_active_positions"] == 2
+        assert config["strategy"]["top_n_entries_per_cycle"] == 1
+        assert config["strategy"]["satellite_max_active_positions"] == 1
+        assert config["strategy"]["satellite_min_entry_score_bonus"] == pytest.approx(0.04)
+        assert config["strategy"]["core_symbols"] == [
+            "BTC/USDT",
+            "ETH/USDT",
+            "SOL/USDT",
+        ]
+        assert config["strategy"]["satellite_symbols"] == [
+            "BNB/USDT",
+            "LINK/USDT",
+            "XRP/USDT",
+        ]
+        assert config["risk"]["max_single_exposure"] == pytest.approx(0.06)
 
     def test_apply_regime_trend_profile_overrides_runtime_knobs(self):
         config = {

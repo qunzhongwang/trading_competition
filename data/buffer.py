@@ -154,6 +154,10 @@ class LiveBuffer:
                 "funding_rate": self._funding_data.get(symbol, 0.0),
                 "taker_ratio": self._taker_data.get(symbol, 0.0),
                 "open_interest": self._open_interest_data.get(symbol, 0.0),
+                "has_order_book_imbalance": "order_book_imbalance" in depth,
+                "has_funding_rate": symbol in self._funding_data,
+                "has_taker_ratio": symbol in self._taker_data,
+                "has_open_interest": symbol in self._open_interest_data,
             }
 
     async def get_supplementary_history(self, symbol: str, n: int) -> dict:

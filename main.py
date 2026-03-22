@@ -5,7 +5,7 @@ Usage:
     uv run python main.py --config config/live.yaml  # custom config
     uv run python main.py --mode live             # override mode
     uv run python main.py --mode roostoo          # Roostoo competition mode
-    uv run python main.py --mode roostoo --strategy-profile capital_preservation_v1
+    uv run python main.py --mode roostoo --strategy-profile core_satellite_rotation_v1
 """
 
 from __future__ import annotations
@@ -114,6 +114,107 @@ STRATEGY_PROFILES: dict[str, dict] = {
         "risk": {
             "max_portfolio_exposure": 0.18,
             "max_single_exposure": 0.05,
+            "trailing_stop_pct": 0.018,
+            "atr_stop_multiplier": 1.6,
+            "daily_drawdown_limit": 0.025,
+            "max_orders_per_minute": 8,
+            "break_even_trigger_pct": 0.012,
+            "break_even_buffer_pct": 0.0015,
+        },
+    },
+    "core_satellite_rotation_v1": {
+        "symbols": [
+            "BTC/USDT",
+            "ETH/USDT",
+            "SOL/USDT",
+            "BNB/USDT",
+            "LINK/USDT",
+            "XRP/USDT",
+        ],
+        "alpha": {
+            "engine": "rule_based",
+            "resample_minutes": 5,
+            "multi_timeframes": [15, 60],
+        },
+        "strategy": {
+            "profile": "core_satellite_rotation_v1",
+            "use_model_overlay": False,
+            "position_size_pct": 0.055,
+            "base_size_pct": 0.018,
+            "max_size_pct": 0.06,
+            "kelly_fraction": 0.28,
+            "estimated_win_rate": 0.54,
+            "estimated_payoff": 1.30,
+            "confirmation_bars": 3,
+            "min_entry_score": 0.74,
+            "max_blocker_score": 0.18,
+            "min_exit_score": 0.38,
+            "min_supporting_factors": 4,
+            "min_supporting_categories": 3,
+            "require_trend_alignment": True,
+            "urgent_entry_score": 0.88,
+            "signal_horizon_minutes": 300,
+            "exit_horizon_minutes": 20,
+            "base_stop_loss_pct": 0.008,
+            "take_profit_1_rr": 0.8,
+            "take_profit_2_rr": 1.5,
+            "model_filter_threshold": 0.05,
+            "model_exit_threshold": -0.10,
+            "model_size_weight": 0.15,
+            "neutral_entry_size_multiplier": 0.10,
+            "risk_off_entry_size_multiplier": 0.00,
+            "min_volatility_size_multiplier": 0.18,
+            "min_volume_ratio": 1.10,
+            "min_order_book_imbalance": 1.03,
+            "max_funding_rate": 0.00022,
+            "max_taker_ratio": 1.04,
+            "max_open_interest_change": 0.010,
+            "open_interest_lookback_samples": 60,
+            "max_volatility": 0.0155,
+            "core_symbols": ["BTC/USDT", "ETH/USDT", "SOL/USDT"],
+            "satellite_symbols": [
+                "BNB/USDT",
+                "LINK/USDT",
+                "XRP/USDT",
+            ],
+            "allow_satellite_in_neutral": False,
+            "top_n_entries_per_cycle": 1,
+            "max_active_positions": 2,
+            "satellite_max_active_positions": 1,
+            "satellite_min_entry_score_bonus": 0.04,
+            "core_priority_bonus": 0.05,
+            "factor_weights": {
+                "market_regime": 0.30,
+                "trend_alignment": 0.28,
+                "momentum_impulse": 0.10,
+                "breakout_confirmation": 0.06,
+                "volume_confirmation": 0.14,
+                "liquidity_balance": 0.10,
+                "perp_crowding": 0.10,
+                "volatility_regime": 0.14,
+            },
+        },
+        "regime": {
+            "enabled": True,
+            "benchmark_symbols": ["BTC/USDT", "ETH/USDT"],
+            "risk_on_threshold": 0.28,
+            "neutral_threshold": 0.10,
+            "breadth_min_symbols": 4,
+            "volatility_ceiling": 0.015,
+        },
+        "trend": {
+            "breakout_lookback": 24,
+            "trend_slope_lookback": 24,
+            "volume_zscore_window": 24,
+            "breakout_min_distance": 0.16,
+            "breakout_overheat_distance": 1.15,
+            "min_trend_slope": 0.0007,
+            "min_volume_zscore": 0.08,
+            "vol_target_floor": 0.010,
+        },
+        "risk": {
+            "max_portfolio_exposure": 0.18,
+            "max_single_exposure": 0.06,
             "trailing_stop_pct": 0.018,
             "atr_stop_multiplier": 1.6,
             "daily_drawdown_limit": 0.025,
@@ -302,7 +403,7 @@ def setup_logging(mode: str = "paper") -> None:
 
 
 def load_config(path: str) -> dict:
-    with open(path, "r") as f:
+    with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 
@@ -740,7 +841,7 @@ async def main(config: dict) -> None:
         )
         if not has_any_position:
             if any(pos.quantity > 0 for pos in tracker.snapshot().positions):
-                logger.info(
+                    logger.info(
                     "Only dust positions detected (< $%.2f), seed trade still allowed",
                     min_seed_position_notional,
                 )
@@ -754,11 +855,19 @@ async def main(config: dict) -> None:
                     order_type=OrderType.MARKET,
                     quantity=seed_qty,
                 )
-                result = await order_manager.submit(seed_order)
+                validated_seed_order = risk_shield.validate(
+                    seed_order,
+                    tracker,
+                    market_price=seed_price,
+                )
+                if validated_seed_order is None:
+                    logger.warning("Seed trade rejected by risk shield")
+                else:
+                    result = await order_manager.submit(validated_seed_order)
                 logger.info(
                     "Seed trade: BUY $2 of %s qty=%.8f — status=%s",
                     seed_symbol,
-                    seed_qty,
+                    validated_seed_order.quantity,
                     result.status.value,
                 )
             else:

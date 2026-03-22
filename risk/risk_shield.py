@@ -124,6 +124,7 @@ class RiskShield:
                     "ADJUSTED: clamped to single exposure limit, qty=%.6f",
                     order.quantity,
                 )
+                order_value = price * order.quantity
 
             # Portfolio exposure check
             total_exposure = tracker.get_total_exposure()
@@ -145,9 +146,10 @@ class RiskShield:
                     "ADJUSTED: clamped to portfolio exposure limit, qty=%.6f",
                     order.quantity,
                 )
+                order_value = price * order.quantity
 
             # Cash check
-            total_cost = price * order.quantity * 1.001  # include rough fee estimate
+            total_cost = order_value * 1.001  # include rough fee estimate
             if total_cost > snapshot.cash:
                 order.quantity = (
                     snapshot.cash * 0.999

@@ -12,7 +12,7 @@ For a Chinese architecture map with diagrams and module I/O contracts, see [`ARC
 
 ## Quick Start
 
-Default Roostoo runtime is pinned to the explicit `capital_preservation_v1` profile.
+Default Roostoo runtime is pinned to the explicit `core_satellite_rotation_v1` profile.
 
 ```bash
 cd /Users/kevinwu/Coding/trading_competition
@@ -31,6 +31,15 @@ The status log now includes:
 - strategy profile
 - current regime plus regime score and breadth
 - adaptive quantity formatting so tiny recovered positions do not appear as `0.0000`
+
+Current competition default:
+
+- Core: `BTC/USDT`, `ETH/USDT`, `SOL/USDT`
+- Satellite: `BNB/USDT`, `LINK/USDT`, `XRP/USDT`
+- at most `2` active positions
+- at most `1` fresh entry per cycle
+- at most `1` satellite position
+- satellites require a stricter entry score than core symbols
 
 ## Core Architecture
 
@@ -203,15 +212,17 @@ It may only:
 
 ## Strategy Profile
 
-The default runtime now uses the explicit `capital_preservation_v1` profile.
+The default runtime now uses the explicit `core_satellite_rotation_v1` profile.
 
 - it keeps the system factor-first
+- it concentrates the competition universe into `BTC/ETH/SOL + BNB/LINK/XRP`
 - it upgrades the market-regime filter to require both strong benchmarks and broad participation before `risk_on`
-- it blocks new longs in `risk_off` and cuts `neutral` entries to quarter-size
-- it requires broader multi-factor confirmation before new longs are allowed
-- it uses tighter exposure, drawdown, and profit-lock risk rules for weaker crypto tape
+- it blocks new longs in `risk_off` and only allows core symbols to open in `neutral`
+- it limits fresh entries to the best candidate each cycle and caps total active positions at `2`
+- it caps satellite exposure at `1` slot and demands a stricter score threshold than core symbols
+- it uses tighter taker / funding / open-interest / volatility thresholds to avoid noisy hot-token chasing
 
-For Roostoo mode, [`scripts/start_competition.sh`](scripts/start_competition.sh) launches with `--strategy-profile capital_preservation_v1` so the runtime is pinned to that profile instead of relying on ad hoc flag combinations.
+For Roostoo mode, [`scripts/start_competition.sh`](scripts/start_competition.sh) launches with `--strategy-profile core_satellite_rotation_v1` so the runtime is pinned to that profile instead of relying on ad hoc flag combinations.
 
 Important:
 
@@ -393,10 +404,19 @@ This keeps the architecture stable even as the research surface expands.
 
 - uses Binance for market data
 - uses Roostoo for execution
+- defaults to `core_satellite_rotation_v1`
 - recovers positions on restart
 - backfills resampled strategy history on startup so factor generation is warm immediately instead of waiting for fresh 5m / 15m / 1h bars
 - keeps sell-side strategy state in `EXIT_PENDING` while Roostoo orders are only partially filled
 - writes structured JSONL logs
+
+Competition profile highlights:
+
+- universe: `BTC/ETH/SOL/BNB/LINK/XRP`
+- majors are prioritized over satellites
+- `neutral` regime only opens core symbols
+- `risk_on` may open satellites, but only if they beat the stricter satellite score gate
+- the startup seed trade also passes through `RiskShield` before submission
 
 Roostoo credentials can come from either:
 
@@ -445,6 +465,12 @@ Wrapper script:
 
 ```bash
 ./scripts/start_competition.sh
+```
+
+Override the profile explicitly if needed:
+
+```bash
+STRATEGY_PROFILE=core_satellite_rotation_v1 ./scripts/start_competition.sh
 ```
 
 ## Roostoo Smoke Tests

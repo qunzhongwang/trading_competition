@@ -64,6 +64,9 @@ class TestFactorEngine:
                 "funding_rate": 0.0001,
                 "taker_ratio": 1.01,
                 "open_interest": 1000.0,
+                "has_funding_rate": True,
+                "has_taker_ratio": True,
+                "has_open_interest": True,
             },
             supplementary_history={"open_interest": [1000.0, 1005.0, 1010.0]},
             candles_15m=_candles(100.0, 0.5, 4),
@@ -87,12 +90,29 @@ class TestFactorEngine:
                 "funding_rate": 0.0010,
                 "taker_ratio": 1.40,
                 "open_interest": 1200.0,
+                "has_funding_rate": True,
+                "has_taker_ratio": True,
+                "has_open_interest": True,
             },
             supplementary_history={"open_interest": [1000.0, 1100.0, 1200.0]},
         )
         perp = next(obs for obs in snapshot.observations if obs.name == "perp_crowding")
         assert perp.bias == FactorBias.BEARISH
         assert snapshot.blocker_score > 0.0
+
+    def test_perp_crowding_stays_neutral_when_derivatives_data_is_missing(self):
+        engine = FactorEngine({"strategy": {}})
+        snapshot = engine.evaluate(
+            _feature_vector(),
+            supplementary={},
+            supplementary_history={},
+        )
+        perp = next(obs for obs in snapshot.observations if obs.name == "perp_crowding")
+        assert perp.bias == FactorBias.NEUTRAL
+        assert perp.strength == 0.0
+        assert perp.metadata["has_funding_rate"] is False
+        assert perp.metadata["has_taker_ratio"] is False
+        assert perp.metadata["has_open_interest"] is False
 
     def test_market_risk_off_adds_regime_blocker(self):
         engine = FactorEngine({"strategy": {}, "regime": {"enabled": True}})
@@ -117,6 +137,9 @@ class TestFactorEngine:
             "funding_rate": 0.0,
             "taker_ratio": 1.0,
             "open_interest": 130.0,
+            "has_funding_rate": True,
+            "has_taker_ratio": True,
+            "has_open_interest": True,
         }
 
         short_snapshot = engine.evaluate(

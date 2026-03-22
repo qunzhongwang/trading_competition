@@ -1,0 +1,18 @@
+Competition Whitelist: Core + Satellite
+
+Core
+BTC/USDT
+ETH/USDT
+SOL/USDT
+
+Satellite
+BNB/USDT
+LINK/USDT
+XRP/USDT
+
+Usage Notes
+- Default trading universe: all 6 symbols above
+- Neutral regime: only Core symbols should be eligible for new entries
+- Risk-on regime: Core + Satellite are eligible, but only the single best fresh entry should be traded each cycle
+- Initial target: hold at most 2 active positions at the same time
+- Satellite positions should stay capped at 1 and require a stricter entry score than Core
